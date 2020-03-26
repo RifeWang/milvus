@@ -1,5 +1,4 @@
 import pdb
-import copy
 import struct
 from random import sample
 
@@ -116,6 +115,17 @@ class TestSearchBase:
     def get_hamming_index(self, request, connect):
         logging.getLogger().info(request.param)
         if request.param["index_type"] == IndexType.IVFLAT or request.param["index_type"] == IndexType.FLAT:
+            return request.param
+        else:
+            pytest.skip("Skip index Temporary")
+
+    @pytest.fixture(
+        scope="function",
+        params=gen_simple_index()
+    )
+    def get_structure_index(self, request, connect):
+        logging.getLogger().info(request.param)
+        if request.param["index_type"] == IndexType.FLAT:
             return request.param
         else:
             pytest.skip("Skip index Temporary")
@@ -396,6 +406,8 @@ class TestSearchBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
+        if index_type == IndexType.RNSG:
+            pytest.skip("rnsg not support in ip")
         vectors, ids = self.init_data(connect, ip_collection)
         status = connect.create_index(ip_collection, index_type, index_param)
         query_vec = [vectors[0]]
@@ -422,6 +434,8 @@ class TestSearchBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
+        if index_type == IndexType.RNSG:
+            pytest.skip("rnsg not support in ip")
         vectors, ids = self.init_data(connect, ip_collection)
         status = connect.create_index(ip_collection, index_type, index_param)
         query_vec = []
@@ -446,6 +460,8 @@ class TestSearchBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(index_param)
+        if index_type == IndexType.RNSG:
+            pytest.skip("rnsg not support in ip")
         status = connect.create_partition(ip_collection, tag)
         vectors, ids = self.init_data(connect, ip_collection)
         status = connect.create_index(ip_collection, index_type, index_param)
@@ -473,6 +489,8 @@ class TestSearchBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(index_param)
+        if index_type == IndexType.RNSG:
+            pytest.skip("rnsg not support in ip")
         status = connect.create_partition(ip_collection, tag)
         vectors, ids = self.init_data(connect, ip_collection, partition_tags=tag)
         status = connect.create_index(ip_collection, index_type, index_param)
@@ -632,6 +650,116 @@ class TestSearchBase:
         logging.getLogger().info(result)
         assert abs(result[0][0].distance - min(distance_0, distance_1).astype(float)) <= epsilon
 
+    def test_search_distance_substructure_flat_index(self, connect, substructure_collection):
+        '''
+        target: search ip_collection, and check the result: distance
+        method: compare the return distance value with value computed with Inner product
+        expected: the return distance equals to the computed value
+        '''
+        # from scipy.spatial import distance
+        top_k = 1
+        nprobe = 512
+        int_vectors, vectors, ids = self.init_binary_data(connect, substructure_collection, nb=2)
+        index_type = IndexType.FLAT
+        index_param = {
+            "nlist": 16384
+        }
+        connect.create_index(substructure_collection, index_type, index_param)
+        logging.getLogger().info(connect.describe_collection(substructure_collection))
+        logging.getLogger().info(connect.describe_index(substructure_collection))
+        query_int_vectors, query_vecs, tmp_ids = self.init_binary_data(connect, substructure_collection, nb=1, insert=False)
+        distance_0 = substructure(query_int_vectors[0], int_vectors[0])
+        distance_1 = substructure(query_int_vectors[0], int_vectors[1])
+        search_param = get_search_param(index_type)
+        status, result = connect.search_vectors(substructure_collection, top_k, query_vecs, params=search_param)
+        logging.getLogger().info(status)
+        logging.getLogger().info(result)
+        assert result[0][0].id == -1
+
+    def test_search_distance_substructure_flat_index_B(self, connect, substructure_collection):
+        '''
+        target: search ip_collection, and check the result: distance
+        method: compare the return distance value with value computed with SUB 
+        expected: the return distance equals to the computed value
+        '''
+        # from scipy.spatial import distance
+        top_k = 3
+        nprobe = 512
+        int_vectors, vectors, ids = self.init_binary_data(connect, substructure_collection, nb=2)
+        index_type = IndexType.FLAT
+        index_param = {
+            "nlist": 16384
+        }
+        connect.create_index(substructure_collection, index_type, index_param)
+        logging.getLogger().info(connect.describe_collection(substructure_collection))
+        logging.getLogger().info(connect.describe_index(substructure_collection))
+        query_int_vectors, query_vecs = gen_binary_sub_vectors(int_vectors, 2)
+        search_param = get_search_param(index_type)
+        status, result = connect.search_vectors(substructure_collection, top_k, query_vecs, params=search_param)
+        logging.getLogger().info(status)
+        logging.getLogger().info(result) 
+        assert result[0][0].distance <= epsilon
+        assert result[0][0].id == ids[0]
+        assert result[1][0].distance <= epsilon
+        assert result[1][0].id == ids[1]
+        assert result[0][1].id == -1
+        assert result[1][1].id == -1
+
+    def test_search_distance_superstructure_flat_index(self, connect, superstructure_collection):
+        '''
+        target: search ip_collection, and check the result: distance
+        method: compare the return distance value with value computed with Inner product
+        expected: the return distance equals to the computed value
+        '''
+        # from scipy.spatial import distance
+        top_k = 1
+        nprobe = 512
+        int_vectors, vectors, ids = self.init_binary_data(connect, superstructure_collection, nb=2)
+        index_type = IndexType.FLAT
+        index_param = {
+            "nlist": 16384
+        }
+        connect.create_index(superstructure_collection, index_type, index_param)
+        logging.getLogger().info(connect.describe_collection(superstructure_collection))
+        logging.getLogger().info(connect.describe_index(superstructure_collection))
+        query_int_vectors, query_vecs, tmp_ids = self.init_binary_data(connect, superstructure_collection, nb=1, insert=False)
+        distance_0 = superstructure(query_int_vectors[0], int_vectors[0])
+        distance_1 = superstructure(query_int_vectors[0], int_vectors[1])
+        search_param = get_search_param(index_type)
+        status, result = connect.search_vectors(superstructure_collection, top_k, query_vecs, params=search_param)
+        logging.getLogger().info(status)
+        logging.getLogger().info(result)
+        assert result[0][0].id == -1
+
+    def test_search_distance_superstructure_flat_index_B(self, connect, superstructure_collection):
+        '''
+        target: search ip_collection, and check the result: distance
+        method: compare the return distance value with value computed with SUPER
+        expected: the return distance equals to the computed value
+        '''
+        # from scipy.spatial import distance
+        top_k = 3
+        nprobe = 512
+        int_vectors, vectors, ids = self.init_binary_data(connect, superstructure_collection, nb=2)
+        index_type = IndexType.FLAT
+        index_param = {
+            "nlist": 16384
+        }
+        connect.create_index(superstructure_collection, index_type, index_param)
+        logging.getLogger().info(connect.describe_collection(superstructure_collection))
+        logging.getLogger().info(connect.describe_index(superstructure_collection))
+        query_int_vectors, query_vecs = gen_binary_super_vectors(int_vectors, 2)
+        search_param = get_search_param(index_type)
+        status, result = connect.search_vectors(superstructure_collection, top_k, query_vecs, params=search_param)
+        logging.getLogger().info(status)
+        logging.getLogger().info(result)
+        assert result[0][0].id in ids
+        assert result[0][0].distance <= epsilon
+        assert result[1][0].id in ids
+        assert result[1][0].distance <= epsilon
+        assert result[0][2].id == -1
+        assert result[1][2].id == -1
+
     def test_search_distance_tanimoto_flat_index(self, connect, tanimoto_collection):
         '''
         target: search ip_collection, and check the result: distance
@@ -666,9 +794,11 @@ class TestSearchBase:
         '''
         top_k = 2
         nprobe = 1
-        vectors, ids = self.init_data(connect, ip_collection, nb=2)
         index_param = get_index["index_param"]
         index_type = get_index["index_type"]
+        if index_type == IndexType.RNSG:
+            pytest.skip("rnsg not support in ip")
+        vectors, ids = self.init_data(connect, ip_collection, nb=2)
         connect.create_index(ip_collection, index_type, index_param)
         logging.getLogger().info(connect.describe_index(ip_collection))
         query_vecs = [[0.50 for i in range(dim)]]
@@ -1034,12 +1164,14 @@ class TestSearchParamsInvalid(object):
                 pytest.skip("ivfpq not support in GPU mode")
         return request.param
 
-    def test_search_with_empty_params(self, connect, collection, get_simple_index):
+    def test_search_with_empty_params(self, connect, collection, args, get_simple_index):
         '''
         target: test search fuction, with empty search params
         method: search with params
         expected: search status not ok, and the connection is normal
         '''
+        if args["handler"] == "HTTP":
+            pytest.skip("skip in http mode")
         index_type = get_simple_index["index_type"]
         index_param = get_simple_index["index_param"]
         connect.create_index(collection, index_type, index_param)
@@ -1078,7 +1210,7 @@ class TestSearchParamsInvalid(object):
         if index_type in [IndexType.IVFLAT, IndexType.IVF_SQ8, IndexType.IVF_SQ8H]:
             connect.create_index(collection, index_type, {"nlist": 16384})
         if (index_type == IndexType.IVF_PQ):
-            connect.create_index(collection, index_type, {"nlist": 16384, "m": 10})
+            connect.create_index(collection, index_type, {"nlist": 16384, "m": 16})
         if(index_type == IndexType.HNSW):
             connect.create_index(collection, index_type, {"M": 16, "efConstruction": 500})
         if (index_type == IndexType.RNSG):

@@ -14,6 +14,7 @@
 #include <faiss/Index.h>
 #include <string>
 
+namespace milvus {
 namespace knowhere {
 
 namespace meta {
@@ -52,9 +53,12 @@ constexpr const char* L2 = "L2";
 constexpr const char* HAMMING = "HAMMING";
 constexpr const char* JACCARD = "JACCARD";
 constexpr const char* TANIMOTO = "TANIMOTO";
+constexpr const char* SUBSTRUCTURE = "SUBSTRUCTURE";
+constexpr const char* SUPERSTRUCTURE = "SUPERSTRUCTURE";
 }  // namespace Metric
 
 extern faiss::MetricType
 GetMetricType(const std::string& type);
 
 }  // namespace knowhere
+}  // namespace milvus

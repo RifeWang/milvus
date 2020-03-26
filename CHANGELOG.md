@@ -8,17 +8,41 @@ Please mark all change in change log and use the issue from GitHub
 -   \#1301 Data in WAL may be accidentally inserted into a new table with the same name.
 -   \#1634 Fix search demo bug in HTTP doc
 -   \#1635 Vectors can be returned by searching after vectors deleted if `cache_insert_data` set true
+-   \#1648 The cache cannot be used all when the vector type is binary
+-   \#1651 Check validity of dimension when collection metric type is binary one
+-   \#1663 PQ index parameter 'm' validation
+-   \#1686 API search_in_files cannot work correctly when vectors is stored in certain non-default partition
+-   \#1689 Fix SQ8H search fail on SIFT-1B dataset
+-   \#1667 Create index failed with type: rnsg if metric_type is IP
+-   \#1708 NSG search crashed
+-   \#1724 Remove unused unittests
+-   \#1728 Optimize request handler to combine similar query
+-   \#1734 Opentracing for combined search request
+-   \#1735 Fix search out of memory with ivf_flat 
+-   \#1756 Fix memory exhausted during searching 
 
 ## Feature
+-   \#1603 BinaryFlat add 2 Metric: Substructure and Superstructure
+-   \#1660 IVF PQ CPU support deleted vectors searching
+-   \#1661 HNSW support deleted vectors searching
 
 ## Improvement
+-   \#267 Improve search performance: reduce delay
+-   \#342 Knowhere and Wrapper refactor
 -   \#1537 Optimize raw vector and uids read/write
 -   \#1546 Move Config.cpp to config directory
 -   \#1547 Rename storage/file to storage/disk and rename classes
 -   \#1548 Move store/Directory to storage/Operation and add FSHandler
+-   \#1572 Optimize config cpu/gpu cache_capacity setter
+-   \#1619 Improve compact performance
+-   \#1649 Fix Milvus crash on old CPU 
+-   \#1653 IndexFlat (SSE) and IndexBinaryFlat performance improvement for small NQ
+-   \#1678 Remove CUSTOMIZATION macro 
+-   \#1698 Upgrade mishards to v0.7.0
+-   \#1719 Improve Milvus log
+-   \#1754 Optimize behavior to get file ids from metadata in mishards
 
 ## Task
-
 
 # Milvus 0.7.0 (2020-03-11)
 
@@ -33,8 +57,8 @@ Please mark all change in change log and use the issue from GitHub
 -   \#995 Table count set to 0 if no tables found
 -   \#1010 Improve error message when offset or page_size is equal 0
 -   \#1022 Check if partition name is valid
--   \#1028 check if table exists when show partitions
--   \#1029 check if table exists when try to delete partition
+-   \#1028 Check if table exists when show partitions
+-   \#1029 Check if table exists when try to delete partition
 -   \#1066 Optimize http insert and search speed
 -   \#1022 Check if partition name is legal
 -   \#1028 Check if table exists when show partitions

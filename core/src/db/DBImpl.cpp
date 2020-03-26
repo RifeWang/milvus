@@ -30,6 +30,7 @@
 #include "cache/GpuCacheMgr.h"
 #include "db/IDGenerator.h"
 #include "engine/EngineFactory.h"
+#include "index/thirdparty/faiss/utils/distances.h"
 #include "insert/MemMenagerFactory.h"
 #include "meta/MetaConsts.h"
 #include "meta/MetaFactory.h"
@@ -77,12 +78,12 @@ DBImpl::DBImpl(const DBOptions& options)
 
     SetIdentity("DBImpl");
     AddCacheInsertDataListener();
+    AddUseBlasThresholdListener();
 
     Start();
 }
 
 DBImpl::~DBImpl() {
-    RemoveCacheInsertDataListener();
     Stop();
 }
 
@@ -338,9 +339,8 @@ DBImpl::PreloadTable(const std::string& table_id) {
     }
 
     // step 1: get all table files from parent table
-    std::vector<size_t> ids;
     meta::TableFilesSchema files_array;
-    auto status = GetFilesToSearch(table_id, ids, files_array);
+    auto status = GetFilesToSearch(table_id, files_array);
     if (!status.ok()) {
         return status;
     }
@@ -349,7 +349,7 @@ DBImpl::PreloadTable(const std::string& table_id) {
     std::vector<meta::TableSchema> partition_array;
     status = meta_ptr_->ShowPartitions(table_id, partition_array);
     for (auto& schema : partition_array) {
-        status = GetFilesToSearch(schema.table_id_, ids, files_array);
+        status = GetFilesToSearch(schema.table_id_, files_array);
     }
 
     int64_t size = 0;
@@ -381,22 +381,23 @@ DBImpl::PreloadTable(const std::string& table_id) {
             return Status(DB_ERROR, "Invalid engine type");
         }
 
-        size += engine->PhysicalSize();
         fiu_do_on("DBImpl.PreloadTable.exceed_cache", size = available_size + 1);
-        if (size > available_size) {
-            ENGINE_LOG_DEBUG << "Pre-load cancelled since cache is almost full";
-            return Status(SERVER_CACHE_FULL, "Cache is full");
-        } else {
-            try {
-                fiu_do_on("DBImpl.PreloadTable.engine_throw_exception", throw std::exception());
-                std::string msg = "Pre-loaded file: " + file.file_id_ + " size: " + std::to_string(file.file_size_);
-                TimeRecorderAuto rc_1(msg);
-                engine->Load(true);
-            } catch (std::exception& ex) {
-                std::string msg = "Pre-load table encounter exception: " + std::string(ex.what());
-                ENGINE_LOG_ERROR << msg;
-                return Status(DB_ERROR, msg);
+
+        try {
+            fiu_do_on("DBImpl.PreloadTable.engine_throw_exception", throw std::exception());
+            std::string msg = "Pre-loaded file: " + file.file_id_ + " size: " + std::to_string(file.file_size_);
+            TimeRecorderAuto rc_1(msg);
+            engine->Load(true);
+
+            size += engine->Size();
+            if (size > available_size) {
+                ENGINE_LOG_DEBUG << "Pre-load cancelled since cache is almost full";
+                return Status(SERVER_CACHE_FULL, "Cache is full");
             }
+        } catch (std::exception& ex) {
+            std::string msg = "Pre-load table encounter exception: " + std::string(ex.what());
+            ENGINE_LOG_ERROR << msg;
+            return Status(DB_ERROR, msg);
         }
     }
 
@@ -687,7 +688,7 @@ DBImpl::Compact(const std::string& table_id) {
     OngoingFileChecker::GetInstance().MarkOngoingFiles(files_to_compact);
 
     Status compact_status;
-    for (meta::TableFilesSchema::iterator iter = files_to_compact.begin(); iter != files_to_compact.end();) {
+    for (auto iter = files_to_compact.begin(); iter != files_to_compact.end();) {
         meta::TableFileSchema file = *iter;
         iter = files_to_compact.erase(iter);
 
@@ -696,17 +697,15 @@ DBImpl::Compact(const std::string& table_id) {
         utils::GetParentPath(file.location_, segment_dir);
 
         segment::SegmentReader segment_reader(segment_dir);
-        segment::DeletedDocsPtr deleted_docs;
-        status = segment_reader.LoadDeletedDocs(deleted_docs);
+        size_t deleted_docs_size;
+        status = segment_reader.ReadDeletedDocsSize(deleted_docs_size);
         if (!status.ok()) {
-            std::string msg = "Failed to load deleted_docs from " + segment_dir;
-            ENGINE_LOG_ERROR << msg;
             OngoingFileChecker::GetInstance().UnmarkOngoingFile(file);
             continue;  // skip this file and try compact next one
         }
 
         meta::TableFilesSchema files_to_update;
-        if (deleted_docs->GetSize() != 0) {
+        if (deleted_docs_size != 0) {
             compact_status = CompactFile(table_id, file, files_to_update);
 
             if (!compact_status.ok()) {
@@ -1102,20 +1101,19 @@ Status
 DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string& table_id,
               const std::vector<std::string>& partition_tags, uint64_t k, const milvus::json& extra_params,
               const VectorsData& vectors, ResultIds& result_ids, ResultDistances& result_distances) {
-    auto query_ctx = context->Child("Query");
+    milvus::server::ContextChild tracer(context, "Query");
 
     if (!initialized_.load(std::memory_order_acquire)) {
         return SHUTDOWN_ERROR;
     }
 
     Status status;
-    std::vector<size_t> ids;
     meta::TableFilesSchema files_array;
 
     if (partition_tags.empty()) {
         // no partition tag specified, means search in whole table
         // get all table files from parent table
-        status = GetFilesToSearch(table_id, ids, files_array);
+        status = GetFilesToSearch(table_id, files_array);
         if (!status.ok()) {
             return status;
         }
@@ -1123,7 +1121,7 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
         std::vector<meta::TableSchema> partition_array;
         status = meta_ptr_->ShowPartitions(table_id, partition_array);
         for (auto& schema : partition_array) {
-            status = GetFilesToSearch(schema.table_id_, ids, files_array);
+            status = GetFilesToSearch(schema.table_id_, files_array);
         }
 
         if (files_array.empty()) {
@@ -1135,7 +1133,7 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
         GetPartitionsByTags(table_id, partition_tags, partition_name_array);
 
         for (auto& partition_name : partition_name_array) {
-            status = GetFilesToSearch(partition_name, ids, files_array);
+            status = GetFilesToSearch(partition_name, files_array);
         }
 
         if (files_array.empty()) {
@@ -1144,19 +1142,17 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
     }
 
     cache::CpuCacheMgr::GetInstance()->PrintInfo();  // print cache info before query
-    status = QueryAsync(query_ctx, table_id, files_array, k, extra_params, vectors, result_ids, result_distances);
+    status = QueryAsync(tracer.Context(), files_array, k, extra_params, vectors, result_ids, result_distances);
     cache::CpuCacheMgr::GetInstance()->PrintInfo();  // print cache info after query
-
-    query_ctx->GetTraceContext()->GetSpan()->Finish();
 
     return status;
 }
 
 Status
-DBImpl::QueryByFileID(const std::shared_ptr<server::Context>& context, const std::string& table_id,
-                      const std::vector<std::string>& file_ids, uint64_t k, const milvus::json& extra_params,
-                      const VectorsData& vectors, ResultIds& result_ids, ResultDistances& result_distances) {
-    auto query_ctx = context->Child("Query by file id");
+DBImpl::QueryByFileID(const std::shared_ptr<server::Context>& context, const std::vector<std::string>& file_ids,
+                      uint64_t k, const milvus::json& extra_params, const VectorsData& vectors, ResultIds& result_ids,
+                      ResultDistances& result_distances) {
+    milvus::server::ContextChild tracer(context, "Query by file id");
 
     if (!initialized_.load(std::memory_order_acquire)) {
         return SHUTDOWN_ERROR;
@@ -1165,28 +1161,24 @@ DBImpl::QueryByFileID(const std::shared_ptr<server::Context>& context, const std
     // get specified files
     std::vector<size_t> ids;
     for (auto& id : file_ids) {
-        meta::TableFileSchema table_file;
-        table_file.table_id_ = table_id;
         std::string::size_type sz;
         ids.push_back(std::stoul(id, &sz));
     }
 
-    meta::TableFilesSchema files_array;
-    auto status = GetFilesToSearch(table_id, ids, files_array);
+    meta::TableFilesSchema search_files;
+    auto status = meta_ptr_->FilesByID(ids, search_files);
     if (!status.ok()) {
         return status;
     }
 
-    fiu_do_on("DBImpl.QueryByFileID.empty_files_array", files_array.clear());
-    if (files_array.empty()) {
+    fiu_do_on("DBImpl.QueryByFileID.empty_files_array", search_files.clear());
+    if (search_files.empty()) {
         return Status(DB_ERROR, "Invalid file id");
     }
 
     cache::CpuCacheMgr::GetInstance()->PrintInfo();  // print cache info before query
-    status = QueryAsync(query_ctx, table_id, files_array, k, extra_params, vectors, result_ids, result_distances);
+    status = QueryAsync(tracer.Context(), search_files, k, extra_params, vectors, result_ids, result_distances);
     cache::CpuCacheMgr::GetInstance()->PrintInfo();  // print cache info after query
-
-    query_ctx->GetTraceContext()->GetSpan()->Finish();
 
     return status;
 }
@@ -1204,11 +1196,10 @@ DBImpl::Size(uint64_t& result) {
 // internal methods
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 Status
-DBImpl::QueryAsync(const std::shared_ptr<server::Context>& context, const std::string& table_id,
-                   const meta::TableFilesSchema& files, uint64_t k, const milvus::json& extra_params,
-                   const VectorsData& vectors, ResultIds& result_ids, ResultDistances& result_distances) {
-    auto query_async_ctx = context->Child("Query Async");
-
+DBImpl::QueryAsync(const std::shared_ptr<server::Context>& context, const meta::TableFilesSchema& files, uint64_t k,
+                   const milvus::json& extra_params, const VectorsData& vectors, ResultIds& result_ids,
+                   ResultDistances& result_distances) {
+    milvus::server::ContextChild tracer(context, "Query Async");
     server::CollectQueryMetrics metrics(vectors.vector_count_);
 
     TimeRecorder rc("");
@@ -1217,7 +1208,7 @@ DBImpl::QueryAsync(const std::shared_ptr<server::Context>& context, const std::s
     auto status = OngoingFileChecker::GetInstance().MarkOngoingFiles(files);
 
     ENGINE_LOG_DEBUG << "Engine query begin, index file count: " << files.size();
-    scheduler::SearchJobPtr job = std::make_shared<scheduler::SearchJob>(query_async_ctx, k, extra_params, vectors);
+    scheduler::SearchJobPtr job = std::make_shared<scheduler::SearchJob>(tracer.Context(), k, extra_params, vectors);
     for (auto& file : files) {
         scheduler::TableFileSchemaPtr file_ptr = std::make_shared<meta::TableFileSchema>(file);
         job->AddIndexFile(file_ptr);
@@ -1236,8 +1227,6 @@ DBImpl::QueryAsync(const std::shared_ptr<server::Context>& context, const std::s
     result_ids = job->GetResultIds();
     result_distances = job->GetResultDistances();
     rc.ElapseFromBegin("Engine query totally cost");
-
-    query_async_ctx->GetTraceContext()->GetSpan()->Finish();
 
     return Status::OK();
 }
@@ -1610,12 +1599,11 @@ DBImpl::GetFilesToBuildIndex(const std::string& table_id, const std::vector<int>
 }
 
 Status
-DBImpl::GetFilesToSearch(const std::string& table_id, const std::vector<size_t>& file_ids,
-                         meta::TableFilesSchema& files) {
+DBImpl::GetFilesToSearch(const std::string& table_id, meta::TableFilesSchema& files) {
     ENGINE_LOG_DEBUG << "Collect files from table: " << table_id;
 
     meta::TableFilesSchema search_files;
-    auto status = meta_ptr_->FilesToSearch(table_id, file_ids, search_files);
+    auto status = meta_ptr_->FilesToSearch(table_id, search_files);
     if (!status.ok()) {
         return status;
     }
@@ -2066,6 +2054,11 @@ DBImpl::BackgroundWalTask() {
 void
 DBImpl::OnCacheInsertDataChanged(bool value) {
     options_.insert_cache_immediately_ = value;
+}
+
+void
+DBImpl::OnUseBlasThresholdChanged(int64_t threshold) {
+    faiss::distance_compute_blas_threshold = threshold;
 }
 
 }  // namespace engine

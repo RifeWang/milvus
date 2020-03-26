@@ -11,20 +11,20 @@
 
 #include "utils/ValidationUtil.h"
 #include "Log.h"
+#include "db/Types.h"
+#include "db/Utils.h"
 #include "db/engine/ExecutionEngine.h"
-#include "index/knowhere/knowhere/index/vector_index/helpers/IndexParameter.h"
+#include "knowhere/index/vector_index/ConfAdapter.h"
+#include "knowhere/index/vector_index/helpers/IndexParameter.h"
 #include "utils/StringHelpFunctions.h"
 
 #include <arpa/inet.h>
 
 #ifdef MILVUS_GPU_VERSION
-
 #include <cuda_runtime.h>
-
 #endif
 
 #include <fiu-local.h>
-#include <src/db/Types.h>
 #include <algorithm>
 #include <cmath>
 #include <regex>
@@ -43,7 +43,9 @@ CheckParameterRange(const milvus::json& json_params, const std::string& param_na
                     bool min_close = true, bool max_closed = true) {
     if (json_params.find(param_name) == json_params.end()) {
         std::string msg = "Parameter list must contain: ";
-        return Status(SERVER_INVALID_ARGUMENT, msg + param_name);
+        msg += param_name;
+        SERVER_LOG_ERROR << msg;
+        return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
     try {
@@ -59,7 +61,9 @@ CheckParameterRange(const milvus::json& json_params, const std::string& param_na
         }
     } catch (std::exception& e) {
         std::string msg = "Invalid " + param_name + ": ";
-        return Status(SERVER_INVALID_ARGUMENT, msg + e.what());
+        msg += e.what();
+        SERVER_LOG_ERROR << msg;
+        return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
     return Status::OK();
@@ -69,7 +73,9 @@ Status
 CheckParameterExistence(const milvus::json& json_params, const std::string& param_name) {
     if (json_params.find(param_name) == json_params.end()) {
         std::string msg = "Parameter list must contain: ";
-        return Status(SERVER_INVALID_ARGUMENT, msg + param_name);
+        msg += param_name;
+        SERVER_LOG_ERROR << msg;
+        return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
     try {
@@ -81,7 +87,9 @@ CheckParameterExistence(const milvus::json& json_params, const std::string& para
         }
     } catch (std::exception& e) {
         std::string msg = "Invalid " + param_name + ": ";
-        return Status(SERVER_INVALID_ARGUMENT, msg + e.what());
+        msg += e.what();
+        SERVER_LOG_ERROR << msg;
+        return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
     return Status::OK();
@@ -128,16 +136,25 @@ ValidationUtil::ValidateTableName(const std::string& table_name) {
 }
 
 Status
-ValidationUtil::ValidateTableDimension(int64_t dimension) {
+ValidationUtil::ValidateTableDimension(int64_t dimension, int64_t metric_type) {
     if (dimension <= 0 || dimension > TABLE_DIMENSION_LIMIT) {
         std::string msg = "Invalid table dimension: " + std::to_string(dimension) + ". " +
                           "The table dimension must be within the range of 1 ~ " +
                           std::to_string(TABLE_DIMENSION_LIMIT) + ".";
         SERVER_LOG_ERROR << msg;
         return Status(SERVER_INVALID_VECTOR_DIMENSION, msg);
-    } else {
-        return Status::OK();
     }
+
+    if (milvus::engine::utils::IsBinaryMetricType(metric_type)) {
+        if ((dimension % 8) != 0) {
+            std::string msg = "Invalid table dimension: " + std::to_string(dimension) + ". " +
+                              "The table dimension must be a multiple of 8";
+            SERVER_LOG_ERROR << msg;
+            return Status(SERVER_INVALID_VECTOR_DIMENSION, msg);
+        }
+    }
+
+    return Status::OK();
 }
 
 Status
@@ -150,7 +167,7 @@ ValidationUtil::ValidateTableIndexType(int32_t index_type) {
         return Status(SERVER_INVALID_INDEX_TYPE, msg);
     }
 
-#ifndef CUSTOMIZATION
+#ifndef MILVUS_GPU_VERSION
     // special case, hybird index only available in customize faiss library
     if (engine_type == static_cast<int>(engine::EngineType::FAISS_IVFSQ8H)) {
         std::string msg = "Unsupported index type: " + std::to_string(index_type);
@@ -189,6 +206,31 @@ ValidationUtil::ValidateIndexParams(const milvus::json& index_params, const engi
             status = CheckParameterExistence(index_params, knowhere::IndexParams::m);
             if (!status.ok()) {
                 return status;
+            }
+
+            // special check for 'm' parameter
+            std::vector<int64_t> resset;
+            milvus::knowhere::IVFPQConfAdapter::GetValidMList(table_schema.dimension_, resset);
+            int64_t m_value = index_params[index_params, knowhere::IndexParams::m];
+            if (resset.empty()) {
+                std::string msg = "Invalid table dimension, unable to get reasonable values for 'm'";
+                SERVER_LOG_ERROR << msg;
+                return Status(SERVER_INVALID_TABLE_DIMENSION, msg);
+            }
+
+            auto iter = std::find(std::begin(resset), std::end(resset), m_value);
+            if (iter == std::end(resset)) {
+                std::string msg =
+                    "Invalid " + std::string(knowhere::IndexParams::m) + ", must be one of the following values: ";
+                for (size_t i = 0; i < resset.size(); i++) {
+                    if (i != 0) {
+                        msg += ",";
+                    }
+                    msg += std::to_string(resset[i]);
+                }
+
+                SERVER_LOG_ERROR << msg;
+                return Status(SERVER_INVALID_ARGUMENT, msg);
             }
 
             break;
@@ -265,6 +307,39 @@ ValidationUtil::ValidateSearchParams(const milvus::json& search_params, const en
 }
 
 Status
+ValidationUtil::ValidateVectorData(const engine::VectorsData& vectors, const engine::meta::TableSchema& table_schema) {
+    if (vectors.float_data_.empty() && vectors.binary_data_.empty()) {
+        return Status(SERVER_INVALID_ROWRECORD_ARRAY,
+                      "The vector array is empty. Make sure you have entered vector records.");
+    }
+
+    uint64_t vector_count = vectors.vector_count_;
+    if (engine::utils::IsBinaryMetricType(table_schema.metric_type_)) {
+        // check prepared binary data
+        if (vectors.binary_data_.size() % vector_count != 0) {
+            return Status(SERVER_INVALID_ROWRECORD_ARRAY, "The vector dimension must be equal to the table dimension.");
+        }
+
+        if (vectors.binary_data_.size() * 8 / vector_count != table_schema.dimension_) {
+            return Status(SERVER_INVALID_VECTOR_DIMENSION,
+                          "The vector dimension must be equal to the table dimension.");
+        }
+    } else {
+        // check prepared float data
+        fiu_do_on("SearchRequest.OnExecute.invalod_rowrecord_array", vector_count = vectors.float_data_.size() + 1);
+        if (vectors.float_data_.size() % vector_count != 0) {
+            return Status(SERVER_INVALID_ROWRECORD_ARRAY, "The vector dimension must be equal to the table dimension.");
+        }
+        if (vectors.float_data_.size() / vector_count != table_schema.dimension_) {
+            return Status(SERVER_INVALID_VECTOR_DIMENSION,
+                          "The vector dimension must be equal to the table dimension.");
+        }
+    }
+
+    return Status::OK();
+}
+
+Status
 ValidationUtil::ValidateTableIndexFileSize(int64_t index_file_size) {
     if (index_file_size <= 0 || index_file_size > INDEX_FILE_SIZE_LIMIT) {
         std::string msg = "Invalid index file size: " + std::to_string(index_file_size) + ". " +
@@ -289,8 +364,8 @@ ValidationUtil::ValidateTableIndexMetricType(int32_t metric_type) {
 }
 
 Status
-ValidationUtil::ValidateSearchTopk(int64_t top_k, const engine::meta::TableSchema& table_schema) {
-    if (top_k <= 0 || top_k > 2048) {
+ValidationUtil::ValidateSearchTopk(int64_t top_k) {
+    if (top_k <= 0 || top_k > QUERY_MAX_TOPK) {
         std::string msg =
             "Invalid topk: " + std::to_string(top_k) + ". " + "The topk must be within the range of 1 ~ 2048.";
         SERVER_LOG_ERROR << msg;

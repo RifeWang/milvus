@@ -25,6 +25,7 @@
 #include "scheduler/SchedInst.h"
 #include "scheduler/job/SearchJob.h"
 #include "segment/SegmentReader.h"
+#include "utils/CommonUtil.h"
 #include "utils/Log.h"
 #include "utils/TimeRecorder.h"
 #include "utils/ValidationUtil.h"
@@ -129,7 +130,7 @@ XSearchTask::XSearchTask(const std::shared_ptr<server::Context>& context, TableF
 
 void
 XSearchTask::Load(LoadType type, uint8_t device_id) {
-    auto load_ctx = context_->Follower("XSearchTask::Load " + std::to_string(file_->id_));
+    milvus::server::ContextFollower tracer(context_, "XSearchTask::Load " + std::to_string(file_->id_));
 
     TimeRecorder rc("");
     Status stat = Status::OK();
@@ -147,7 +148,7 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
                 hybrid = true;
             }
             stat = index_engine_->CopyToGpu(device_id, hybrid);
-            type_str = "CPU2GPU:" + std::to_string(device_id);
+            type_str = "CPU2GPU" + std::to_string(device_id);
         } else if (type == LoadType::GPU2CPU) {
             stat = index_engine_->CopyToCpu();
             type_str = "GPU2CPU";
@@ -181,7 +182,7 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
         return;
     }
 
-    size_t file_size = index_engine_->PhysicalSize();
+    size_t file_size = index_engine_->Size();
 
     std::string info = "Search task load file id:" + std::to_string(file_->id_) + " " + type_str +
                        " file type:" + std::to_string(file_->file_type_) + " size:" + std::to_string(file_size) +
@@ -197,13 +198,11 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
     index_id_ = file_->id_;
     index_type_ = file_->file_type_;
     //    search_contexts_.swap(search_contexts_);
-
-    load_ctx->GetTraceContext()->GetSpan()->Finish();
 }
 
 void
 XSearchTask::Execute() {
-    auto execute_ctx = context_->Follower("XSearchTask::Execute " + std::to_string(index_id_));
+    milvus::server::ContextFollower tracer(context_, "XSearchTask::Execute " + std::to_string(index_id_));
 
     if (index_engine_ == nullptr) {
         return;
@@ -225,7 +224,6 @@ XSearchTask::Execute() {
         uint64_t nq = search_job->nq();
         uint64_t topk = search_job->topk();
         const milvus::json& extra_params = search_job->extra_params();
-        ENGINE_LOG_DEBUG << "Search job extra params: " << extra_params.dump();
         const engine::VectorsData& vectors = search_job->vectors();
 
         output_ids.resize(topk * nq);
@@ -300,8 +298,6 @@ XSearchTask::Execute() {
 
     // release index in resource
     index_engine_ = nullptr;
-
-    execute_ctx->GetTraceContext()->GetSpan()->Finish();
 }
 
 void
