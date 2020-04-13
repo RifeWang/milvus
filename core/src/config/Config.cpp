@@ -39,8 +39,8 @@ namespace server {
 
 constexpr int64_t GB = 1UL << 30;
 
-static const std::unordered_map<std::string, std::string> milvus_config_version_map({{"0.6.0", "0.1"},
-                                                                                     {"0.7.0", "0.2"}});
+static const std::unordered_map<std::string, std::string> milvus_config_version_map(
+    {{"0.6.0", "0.1"}, {"0.7.0", "0.2"}, {"0.7.1", "0.2"}, {"0.8.0", "0.3"}});
 
 /////////////////////////////////////////////////////////////
 Config::Config() {
@@ -132,8 +132,8 @@ Config::ValidateConfig() {
     std::string db_backend_url;
     CONFIG_CHECK(GetDBConfigBackendUrl(db_backend_url));
 
-    std::string db_preload_table;
-    CONFIG_CHECK(GetDBConfigPreloadTable(db_preload_table));
+    std::string db_preload_collection;
+    CONFIG_CHECK(GetDBConfigPreloadCollection(db_preload_collection));
 
     int64_t db_archive_disk_threshold;
     CONFIG_CHECK(GetDBConfigArchiveDiskThreshold(db_archive_disk_threshold));
@@ -153,7 +153,7 @@ Config::ValidateConfig() {
 
     bool storage_s3_enable;
     CONFIG_CHECK(GetStorageConfigS3Enable(storage_s3_enable));
-    std::cout << "S3 " << (storage_s3_enable ? "ENABLED !" : "DISABLED !") << std::endl;
+    // std::cout << "S3 " << (storage_s3_enable ? "ENABLED !" : "DISABLED !") << std::endl;
 
     std::string storage_s3_address;
     CONFIG_CHECK(GetStorageConfigS3Address(storage_s3_address));
@@ -260,7 +260,7 @@ Config::ResetDefaultConfig() {
 
     /* db config */
     CONFIG_CHECK(SetDBConfigBackendUrl(CONFIG_DB_BACKEND_URL_DEFAULT));
-    CONFIG_CHECK(SetDBConfigPreloadTable(CONFIG_DB_PRELOAD_TABLE_DEFAULT));
+    CONFIG_CHECK(SetDBConfigPreloadCollection(CONFIG_DB_PRELOAD_COLLECTION_DEFAULT));
     CONFIG_CHECK(SetDBConfigArchiveDiskThreshold(CONFIG_DB_ARCHIVE_DISK_THRESHOLD_DEFAULT));
     CONFIG_CHECK(SetDBConfigArchiveDaysThreshold(CONFIG_DB_ARCHIVE_DAYS_THRESHOLD_DEFAULT));
     CONFIG_CHECK(SetDBConfigAutoFlushInterval(CONFIG_DB_AUTO_FLUSH_INTERVAL_DEFAULT));
@@ -313,9 +313,9 @@ Config::ResetDefaultConfig() {
 }
 
 void
-Config::GetConfigJsonStr(std::string& result) {
+Config::GetConfigJsonStr(std::string& result, int64_t indent) {
     nlohmann::json config_json(config_map_);
-    result = config_json.dump();
+    result = config_json.dump(indent);
 }
 
 Status
@@ -352,8 +352,8 @@ Config::SetConfigCli(const std::string& parent_key, const std::string& child_key
     } else if (parent_key == CONFIG_DB) {
         if (child_key == CONFIG_DB_BACKEND_URL) {
             status = SetDBConfigBackendUrl(value);
-        } else if (child_key == CONFIG_DB_PRELOAD_TABLE) {
-            status = SetDBConfigPreloadTable(value);
+        } else if (child_key == CONFIG_DB_PRELOAD_COLLECTION) {
+            status = SetDBConfigPreloadCollection(value);
         } else if (child_key == CONFIG_DB_AUTO_FLUSH_INTERVAL) {
             status = SetDBConfigAutoFlushInterval(value);
         } else {
@@ -775,8 +775,8 @@ Config::CheckDBConfigBackendUrl(const std::string& value) {
 }
 
 Status
-Config::CheckDBConfigPreloadTable(const std::string& value) {
-    fiu_return_on("check_config_preload_table_fail", Status(SERVER_INVALID_ARGUMENT, ""));
+Config::CheckDBConfigPreloadCollection(const std::string& value) {
+    fiu_return_on("check_config_preload_collection_fail", Status(SERVER_INVALID_ARGUMENT, ""));
 
     if (value.empty() || value == "*") {
         return Status::OK();
@@ -787,22 +787,22 @@ Config::CheckDBConfigPreloadTable(const std::string& value) {
 
     std::unordered_set<std::string> table_set;
 
-    for (auto& table : tables) {
-        if (!ValidationUtil::ValidateTableName(table).ok()) {
-            return Status(SERVER_INVALID_ARGUMENT, "Invalid table name: " + table);
+    for (auto& collection : tables) {
+        if (!ValidationUtil::ValidateCollectionName(collection).ok()) {
+            return Status(SERVER_INVALID_ARGUMENT, "Invalid collection name: " + collection);
         }
         bool exist = false;
-        auto status = DBWrapper::DB()->HasNativeTable(table, exist);
+        auto status = DBWrapper::DB()->HasNativeCollection(collection, exist);
         if (!(status.ok() && exist)) {
-            return Status(SERVER_TABLE_NOT_EXIST, "Table " + table + " not exist");
+            return Status(SERVER_COLLECTION_NOT_EXIST, "Collection " + collection + " not exist");
         }
-        table_set.insert(table);
+        table_set.insert(collection);
     }
 
     if (table_set.size() != tables.size()) {
         std::string msg =
             "Invalid preload tables. "
-            "Possible reason: db_config.preload_table contains duplicate table.";
+            "Possible reason: db_config.preload_collection contains duplicate collection.";
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
@@ -1501,8 +1501,8 @@ Config::GetDBConfigArchiveDaysThreshold(int64_t& value) {
 }
 
 Status
-Config::GetDBConfigPreloadTable(std::string& value) {
-    value = GetConfigStr(CONFIG_DB, CONFIG_DB_PRELOAD_TABLE);
+Config::GetDBConfigPreloadCollection(std::string& value) {
+    value = GetConfigStr(CONFIG_DB, CONFIG_DB_PRELOAD_COLLECTION);
     return Status::OK();
 }
 
@@ -1852,10 +1852,10 @@ Config::SetDBConfigBackendUrl(const std::string& value) {
 }
 
 Status
-Config::SetDBConfigPreloadTable(const std::string& value) {
-    CONFIG_CHECK(CheckDBConfigPreloadTable(value));
+Config::SetDBConfigPreloadCollection(const std::string& value) {
+    CONFIG_CHECK(CheckDBConfigPreloadCollection(value));
     std::string cor_value = value == "*" ? "\'*\'" : value;
-    return SetConfigValueInMem(CONFIG_DB, CONFIG_DB_PRELOAD_TABLE, cor_value);
+    return SetConfigValueInMem(CONFIG_DB, CONFIG_DB_PRELOAD_COLLECTION, cor_value);
 }
 
 Status

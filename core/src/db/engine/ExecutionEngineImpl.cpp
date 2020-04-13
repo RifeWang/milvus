@@ -22,7 +22,6 @@
 #include "cache/GpuCacheMgr.h"
 #include "config/Config.h"
 #include "db/Utils.h"
-#include "index/archive/VecIndex.h"
 #include "knowhere/common/Config.h"
 #include "knowhere/index/vector_index/ConfAdapter.h"
 #include "knowhere/index/vector_index/ConfAdapterMgr.h"
@@ -40,7 +39,10 @@
 #include "knowhere/index/vector_index/helpers/IndexParameter.h"
 #include "metrics/Metrics.h"
 #include "scheduler/Utils.h"
+#include "segment/SegmentReader.h"
+#include "segment/SegmentWriter.h"
 #include "utils/CommonUtil.h"
+#include "utils/Error.h"
 #include "utils/Exception.h"
 #include "utils/Log.h"
 #include "utils/Status.h"
@@ -216,6 +218,10 @@ ExecutionEngineImpl::CreatetVecIndex(EngineType type) {
             index = vec_index_factory.CreateVecIndex(knowhere::IndexEnum::INDEX_HNSW, mode);
             break;
         }
+        case EngineType::ANNOY: {
+            index = vec_index_factory.CreateVecIndex(knowhere::IndexEnum::INDEX_ANNOY, mode);
+            break;
+        }
         default: {
             ENGINE_LOG_ERROR << "Unsupported index type " << (int)type;
             return nullptr;
@@ -348,7 +354,11 @@ ExecutionEngineImpl::Size() const {
 
 Status
 ExecutionEngineImpl::Serialize() {
-    auto status = write_index(index_, location_);
+    std::string segment_dir;
+    utils::GetParentPath(location_, segment_dir);
+    auto segment_writer_ptr = std::make_shared<segment::SegmentWriter>(segment_dir);
+    segment_writer_ptr->SetVectorIndex(index_);
+    segment_writer_ptr->WriteVectorIndex(location_);
 
     // here we reset index size by file size,
     // since some index type(such as SQ8) data size become smaller after serialized
@@ -357,10 +367,10 @@ ExecutionEngineImpl::Serialize() {
 
     if (index_->Size() == 0) {
         std::string msg = "Failed to serialize file: " + location_ + " reason: out of disk space or memory";
-        status = Status(DB_ERROR, msg);
+        return Status(DB_ERROR, msg);
     }
 
-    return status;
+    return Status::OK();
 }
 
 Status
@@ -431,7 +441,10 @@ ExecutionEngineImpl::Load(bool to_cache) {
             ENGINE_LOG_DEBUG << "Finished loading raw data from segment " << segment_dir;
         } else {
             try {
-                index_ = read_index(location_);
+                segment::SegmentPtr segment_ptr;
+                segment_reader_ptr->GetSegment(segment_ptr);
+                auto status = segment_reader_ptr->LoadVectorIndex(location_, segment_ptr->vector_index_ptr_);
+                index_ = segment_ptr->vector_index_ptr_->GetVectorIndex();
 
                 if (index_ == nullptr) {
                     std::string msg = "Failed to load index from " + location_;
@@ -545,13 +558,14 @@ ExecutionEngineImpl::CopyToGpu(uint64_t device_id, bool hybrid) {
 
         try {
             /* Index data is copied to GPU first, then added into GPU cache.
-             * We MUST add a lock here to avoid more than one INDEX are copied to one GPU card at same time,
-             * which will potentially cause GPU out of memory.
+             * Add lock here to avoid multiple INDEX are copied to one GPU card at same time.
+             * And reserve space to avoid GPU out of memory issue.
              */
-            std::lock_guard<std::mutex> lock(*(cache::GpuCacheMgr::GetInstanceMutex(device_id)));
             ENGINE_LOG_DEBUG << "CPU to GPU" << device_id << " start";
+            auto gpu_cache_mgr = cache::GpuCacheMgr::GetInstance(device_id);
+            // gpu_cache_mgr->Reserve(index_->Size());
             index_ = knowhere::cloner::CopyCpuToGpu(index_, device_id, knowhere::Config());
-            GpuCache(device_id);
+            // gpu_cache_mgr->InsertItem(location_, std::static_pointer_cast<cache::DataObj>(index_));
             ENGINE_LOG_DEBUG << "CPU to GPU" << device_id << " finished";
         } catch (std::exception& e) {
             ENGINE_LOG_ERROR << e.what();
@@ -568,10 +582,9 @@ ExecutionEngineImpl::CopyToIndexFileToGpu(uint64_t device_id) {
 #ifdef MILVUS_GPU_VERSION
     // the ToIndexData is only a placeholder, cpu-copy-to-gpu action is performed in
     if (index_) {
+        auto gpu_cache_mgr = milvus::cache::GpuCacheMgr::GetInstance(device_id);
         gpu_num_ = device_id;
-        auto to_index_data = std::make_shared<knowhere::ToIndexData>(index_->Size());
-        cache::DataObjPtr obj = std::static_pointer_cast<cache::DataObj>(to_index_data);
-        milvus::cache::GpuCacheMgr::GetInstance(device_id)->InsertItem(location_ + "_placeholder", obj);
+        gpu_cache_mgr->Reserve(index_->Size());
     }
 #endif
     return Status::OK();
@@ -644,13 +657,13 @@ ExecutionEngineImpl::BuildIndex(const std::string& location, EngineType engine_t
             knowhere::GenDatasetWithIds(Count(), Dimension(), from_index->GetRawVectors(), from_index->GetRawIds());
         to_index->BuildAll(dataset, conf);
         uids = from_index->GetUids();
-        from_index->GetBlacklist(blacklist);
+        blacklist = from_index->GetBlacklist();
     } else if (bin_from_index) {
         auto dataset = knowhere::GenDatasetWithIds(Count(), Dimension(), bin_from_index->GetRawVectors(),
                                                    bin_from_index->GetRawIds());
         to_index->BuildAll(dataset, conf);
         uids = bin_from_index->GetUids();
-        bin_from_index->GetBlacklist(blacklist);
+        blacklist = bin_from_index->GetBlacklist();
     }
 
 #ifdef MILVUS_GPU_VERSION
@@ -750,10 +763,10 @@ ExecutionEngineImpl::Search(int64_t n, const float* data, int64_t k, const milvu
         }
     }
 #endif
-    TimeRecorder rc("ExecutionEngineImpl::Search float");
+    TimeRecorder rc(LogOut("[%s][%ld] ExecutionEngineImpl::Search float", "search", 0));
 
     if (index_ == nullptr) {
-        ENGINE_LOG_ERROR << "ExecutionEngineImpl: index is null, failed to search";
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] ExecutionEngineImpl: index is null, failed to search", "search", 0);
         return Status(DB_ERROR, "index is null");
     }
 
@@ -761,6 +774,7 @@ ExecutionEngineImpl::Search(int64_t n, const float* data, int64_t k, const milvu
     conf[knowhere::meta::TOPK] = k;
     auto adapter = knowhere::AdapterMgr::GetInstance().GetAdapter(index_->index_type());
     if (!adapter->CheckSearch(conf, index_->index_type(), index_->index_mode())) {
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] Illegal search params", "search", 0);
         throw Exception(DB_ERROR, "Illegal search params");
     }
 
@@ -773,7 +787,8 @@ ExecutionEngineImpl::Search(int64_t n, const float* data, int64_t k, const milvu
     auto result = index_->Query(dataset, conf);
     rc.RecordSection("query done");
 
-    ENGINE_LOG_DEBUG << "get uids " << index_->GetUids().size() << " from index " << location_;
+    ENGINE_LOG_DEBUG << LogOut("[%s][%ld] get %ld uids from index %s", "search", 0, index_->GetUids().size(),
+                               location_.c_str());
     MapAndCopyResult(result, index_->GetUids(), n, k, distances, labels);
     rc.RecordSection("map uids " + std::to_string(n * k));
 
@@ -787,10 +802,10 @@ ExecutionEngineImpl::Search(int64_t n, const float* data, int64_t k, const milvu
 Status
 ExecutionEngineImpl::Search(int64_t n, const uint8_t* data, int64_t k, const milvus::json& extra_params,
                             float* distances, int64_t* labels, bool hybrid) {
-    TimeRecorder rc("ExecutionEngineImpl::Search uint8");
+    TimeRecorder rc(LogOut("[%s][%ld] ExecutionEngineImpl::Search uint8", "search", 0));
 
     if (index_ == nullptr) {
-        ENGINE_LOG_ERROR << "ExecutionEngineImpl: index is null, failed to search";
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] ExecutionEngineImpl: index is null, failed to search", "search", 0);
         return Status(DB_ERROR, "index is null");
     }
 
@@ -798,6 +813,7 @@ ExecutionEngineImpl::Search(int64_t n, const uint8_t* data, int64_t k, const mil
     conf[knowhere::meta::TOPK] = k;
     auto adapter = knowhere::AdapterMgr::GetInstance().GetAdapter(index_->index_type());
     if (!adapter->CheckSearch(conf, index_->index_type(), index_->index_mode())) {
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] Illegal search params", "search", 0);
         throw Exception(DB_ERROR, "Illegal search params");
     }
 
@@ -810,7 +826,8 @@ ExecutionEngineImpl::Search(int64_t n, const uint8_t* data, int64_t k, const mil
     auto result = index_->Query(dataset, conf);
     rc.RecordSection("query done");
 
-    ENGINE_LOG_DEBUG << "get uids " << index_->GetUids().size() << " from index " << location_;
+    ENGINE_LOG_DEBUG << LogOut("[%s][%ld] get %ld uids from index %s", "search", 0, index_->GetUids().size(),
+                               location_.c_str());
     MapAndCopyResult(result, index_->GetUids(), n, k, distances, labels);
     rc.RecordSection("map uids " + std::to_string(n * k));
 
@@ -824,10 +841,10 @@ ExecutionEngineImpl::Search(int64_t n, const uint8_t* data, int64_t k, const mil
 Status
 ExecutionEngineImpl::Search(int64_t n, const std::vector<int64_t>& ids, int64_t k, const milvus::json& extra_params,
                             float* distances, int64_t* labels, bool hybrid) {
-    TimeRecorder rc("ExecutionEngineImpl::Search vector of ids");
+    TimeRecorder rc(LogOut("[%s][%ld] ExecutionEngineImpl::Search vector of ids", "search", 0));
 
     if (index_ == nullptr) {
-        ENGINE_LOG_ERROR << "ExecutionEngineImpl: index is null, failed to search";
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] ExecutionEngineImpl: index is null, failed to search", "search", 0);
         return Status(DB_ERROR, "index is null");
     }
 
@@ -835,6 +852,7 @@ ExecutionEngineImpl::Search(int64_t n, const std::vector<int64_t>& ids, int64_t 
     conf[knowhere::meta::TOPK] = k;
     auto adapter = knowhere::AdapterMgr::GetInstance().GetAdapter(index_->index_type());
     if (!adapter->CheckSearch(conf, index_->index_type(), index_->index_mode())) {
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] Illegal search params", "search", 0);
         throw Exception(DB_ERROR, "Illegal search params");
     }
 
@@ -888,7 +906,8 @@ ExecutionEngineImpl::Search(int64_t n, const std::vector<int64_t>& ids, int64_t 
         auto result = index_->QueryById(dataset, conf);
         rc.RecordSection("query by id done");
 
-        ENGINE_LOG_DEBUG << "get uids " << index_->GetUids().size() << " from index " << location_;
+        ENGINE_LOG_DEBUG << LogOut("[%s][%ld] get %ld uids from index %s", "search", 0, index_->GetUids().size(),
+                                   location_.c_str());
         MapAndCopyResult(result, uids, offsets.size(), k, distances, labels);
         rc.RecordSection("map uids " + std::to_string(offsets.size() * k));
     }
@@ -954,18 +973,9 @@ ExecutionEngineImpl::GetVectorByID(const int64_t& id, uint8_t* vector, bool hybr
 
 Status
 ExecutionEngineImpl::Cache() {
+    auto cpu_cache_mgr = milvus::cache::CpuCacheMgr::GetInstance();
     cache::DataObjPtr obj = std::static_pointer_cast<cache::DataObj>(index_);
-    milvus::cache::CpuCacheMgr::GetInstance()->InsertItem(location_, obj);
-
-    return Status::OK();
-}
-
-Status
-ExecutionEngineImpl::GpuCache(uint64_t gpu_id) {
-#ifdef MILVUS_GPU_VERSION
-    cache::DataObjPtr obj = std::static_pointer_cast<cache::DataObj>(index_);
-    milvus::cache::GpuCacheMgr::GetInstance(gpu_id)->InsertItem(location_, obj);
-#endif
+    cpu_cache_mgr->InsertItem(location_, obj);
     return Status::OK();
 }
 

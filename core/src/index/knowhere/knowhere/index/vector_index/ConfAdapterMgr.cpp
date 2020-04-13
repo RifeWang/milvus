@@ -23,9 +23,9 @@ AdapterMgr::GetAdapter(const IndexType type) {
         RegisterAdapter();
 
     try {
-        return table_.at(type)();
+        return collection_.at(type)();
     } catch (...) {
-        KNOWHERE_THROW_MSG("Can not find this type of confadapter");
+        KNOWHERE_THROW_MSG("Can not find confadapter: " + type);
     }
 }
 
@@ -46,6 +46,7 @@ AdapterMgr::RegisterAdapter() {
     REGISTER_CONF_ADAPTER(ConfAdapter, IndexEnum::INDEX_SPTAG_KDT_RNT, sptag_kdt_adapter);
     REGISTER_CONF_ADAPTER(ConfAdapter, IndexEnum::INDEX_SPTAG_BKT_RNT, sptag_bkt_adapter);
     REGISTER_CONF_ADAPTER(HNSWConfAdapter, IndexEnum::INDEX_HNSW, hnsw_adapter);
+    REGISTER_CONF_ADAPTER(ANNOYConfAdapter, IndexEnum::INDEX_ANNOY, annoy_adapter);
 }
 
 }  // namespace knowhere

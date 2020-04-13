@@ -83,8 +83,8 @@ void
 CollectFileMetrics(int file_type, size_t file_size) {
     server::MetricsBase& inst = server::Metrics::GetInstance();
     switch (file_type) {
-        case TableFileSchema::RAW:
-        case TableFileSchema::TO_INDEX: {
+        case SegmentSchema::RAW:
+        case SegmentSchema::TO_INDEX: {
             inst.RawFileSizeHistogramObserve(file_size);
             inst.RawFileSizeTotalIncrement(file_size);
             inst.RawFileSizeGaugeSet(file_size);
@@ -99,7 +99,7 @@ CollectFileMetrics(int file_type, size_t file_size) {
     }
 }
 
-XSearchTask::XSearchTask(const std::shared_ptr<server::Context>& context, TableFileSchemaPtr file, TaskLabelPtr label)
+XSearchTask::XSearchTask(const std::shared_ptr<server::Context>& context, SegmentSchemaPtr file, TaskLabelPtr label)
     : Task(TaskType::SearchTask, std::move(label)), context_(context), file_(file) {
     if (file_) {
         // distance -- value 0 means two vectors equal, ascending reduce, L2/HAMMING/JACCARD/TONIMOTO ...
@@ -110,9 +110,9 @@ XSearchTask::XSearchTask(const std::shared_ptr<server::Context>& context, TableF
         }
 
         EngineType engine_type;
-        if (file->file_type_ == TableFileSchema::FILE_TYPE::RAW ||
-            file->file_type_ == TableFileSchema::FILE_TYPE::TO_INDEX ||
-            file->file_type_ == TableFileSchema::FILE_TYPE::BACKUP) {
+        if (file->file_type_ == SegmentSchema::FILE_TYPE::RAW ||
+            file->file_type_ == SegmentSchema::FILE_TYPE::TO_INDEX ||
+            file->file_type_ == SegmentSchema::FILE_TYPE::BACKUP) {
             engine_type = engine::utils::IsBinaryMetricType(file->metric_type_) ? EngineType::FAISS_BIN_IDMAP
                                                                                 : EngineType::FAISS_IDMAP;
         } else {
@@ -132,7 +132,7 @@ void
 XSearchTask::Load(LoadType type, uint8_t device_id) {
     milvus::server::ContextFollower tracer(context_, "XSearchTask::Load " + std::to_string(file_->id_));
 
-    TimeRecorder rc("");
+    TimeRecorder rc(LogOut("[%s][%ld]", "search", 0));
     Status stat = Status::OK();
     std::string error_msg;
     std::string type_str;
@@ -159,6 +159,7 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
     } catch (std::exception& ex) {
         // typical error: out of disk space or permition denied
         error_msg = "Failed to load index file: " + std::string(ex.what());
+        ENGINE_LOG_ERROR << LogOut("[%s][%ld] Encounter execption: %s", "search", 0, error_msg.c_str());
         stat = Status(SERVER_UNEXPECTED_ERROR, error_msg);
     }
     fiu_do_on("XSearchTask.Load.out_of_memory", stat = Status(SERVER_UNEXPECTED_ERROR, "out of memory"));
@@ -187,10 +188,7 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
     std::string info = "Search task load file id:" + std::to_string(file_->id_) + " " + type_str +
                        " file type:" + std::to_string(file_->file_type_) + " size:" + std::to_string(file_size) +
                        " bytes from location: " + file_->location_ + " totally cost";
-    double span = rc.ElapseFromBegin(info);
-    //    for (auto &context : search_contexts_) {
-    //        context->AccumLoadCost(span);
-    //    }
+    rc.ElapseFromBegin(info);
 
     CollectFileMetrics(file_->file_type_, file_size);
 
@@ -204,14 +202,11 @@ void
 XSearchTask::Execute() {
     milvus::server::ContextFollower tracer(context_, "XSearchTask::Execute " + std::to_string(index_id_));
 
-    if (index_engine_ == nullptr) {
-        return;
-    }
-
     //    ENGINE_LOG_DEBUG << "Searching in file id:" << index_id_ << " with "
     //                     << search_contexts_.size() << " tasks";
 
-    TimeRecorder rc("DoSearch file id:" + std::to_string(index_id_));
+    //    TimeRecorder rc("DoSearch file id:" + std::to_string(index_id_));
+    TimeRecorder rc(LogOut("[%s][%ld] DoSearch file id:%ld", "search", 0, index_id_));
 
     server::CollectDurationMetrics metrics(index_type_);
 
@@ -220,6 +215,12 @@ XSearchTask::Execute() {
 
     if (auto job = job_.lock()) {
         auto search_job = std::static_pointer_cast<scheduler::SearchJob>(job);
+
+        if (index_engine_ == nullptr) {
+            search_job->SearchDone(index_id_);
+            return;
+        }
+
         // step 1: allocate memory
         uint64_t nq = search_job->nq();
         uint64_t topk = search_job->topk();
@@ -265,7 +266,8 @@ XSearchTask::Execute() {
             // step 3: pick up topk result
             auto spec_k = file_->row_count_ < topk ? file_->row_count_ : topk;
             if (spec_k == 0) {
-                ENGINE_LOG_WARNING << "Searching in an empty file. file location = " << file_->location_;
+                ENGINE_LOG_WARNING << LogOut("[%s][%ld] Searching in an empty file. file location = %s", "search", 0,
+                                             file_->location_.c_str());
             }
 
             {
@@ -286,7 +288,7 @@ XSearchTask::Execute() {
             span = rc.RecordSection(hdr + ", reduce topk");
             //            search_job->AccumReduceCost(span);
         } catch (std::exception& ex) {
-            ENGINE_LOG_ERROR << "SearchTask encounter exception: " << ex.what();
+            ENGINE_LOG_ERROR << LogOut("[%s][%ld] SearchTask encounter exception: %s", "search", 0, ex.what());
             //            search_job->IndexSearchDone(index_id_);//mark as done avoid dead lock, even search failed
         }
 
@@ -305,6 +307,7 @@ XSearchTask::MergeTopkToResultSet(const scheduler::ResultIds& src_ids, const sch
                                   size_t src_k, size_t nq, size_t topk, bool ascending, scheduler::ResultIds& tar_ids,
                                   scheduler::ResultDistances& tar_distances) {
     if (src_ids.empty()) {
+        ENGINE_LOG_DEBUG << LogOut("[%s][%d] Search result is empty.", "search", 0);
         return;
     }
 

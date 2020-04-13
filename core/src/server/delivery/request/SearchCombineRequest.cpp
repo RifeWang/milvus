@@ -106,7 +106,7 @@ SearchCombineRequest::Combine(const SearchRequestPtr& request) {
     // reset some parameters in necessary
     if (request_list_.empty()) {
         // validate first request input
-        auto status = ValidationUtil::ValidateTableName(request->TableName());
+        auto status = ValidationUtil::ValidateCollectionName(request->CollectionName());
         if (!status.ok()) {
             return status;
         }
@@ -117,7 +117,7 @@ SearchCombineRequest::Combine(const SearchRequestPtr& request) {
         }
 
         // assign base parameters
-        table_name_ = request->TableName();
+        collection_name_ = request->CollectionName();
         min_topk_ = request->TopK() - MAX_TOPK_GAP / 2;
         if (min_topk_ < 0) {
             min_topk_ = 0;
@@ -138,7 +138,7 @@ SearchCombineRequest::Combine(const SearchRequestPtr& request) {
 
 bool
 SearchCombineRequest::CanCombine(const SearchRequestPtr& request) {
-    if (table_name_ != request->TableName()) {
+    if (collection_name_ != request->CollectionName()) {
         return false;
     }
 
@@ -148,6 +148,15 @@ SearchCombineRequest::CanCombine(const SearchRequestPtr& request) {
 
     // topk must within certain range
     if (request->TopK() < min_topk_ || request->TopK() > max_topk_) {
+        return false;
+    }
+
+    // sum of nq must less-equal than MAX_NQ
+    if (vectors_data_.vector_count_ > MAX_NQ || request->VectorsData().vector_count_ > MAX_NQ) {
+        return false;
+    }
+    uint64_t total_nq = vectors_data_.vector_count_ + request->VectorsData().vector_count_;
+    if (total_nq > MAX_NQ) {
         return false;
     }
 
@@ -170,7 +179,7 @@ SearchCombineRequest::CanCombine(const SearchRequestPtr& request) {
 
 bool
 SearchCombineRequest::CanCombine(const SearchRequestPtr& left, const SearchRequestPtr& right) {
-    if (left->TableName() != right->TableName()) {
+    if (left->CollectionName() != right->CollectionName()) {
         return false;
     }
 
@@ -226,18 +235,19 @@ SearchCombineRequest::OnExecute() {
         size_t combined_request = request_list_.size();
         SERVER_LOG_DEBUG << "SearchCombineRequest execute, request count=" << combined_request
                          << ", extra_params=" << extra_params_.dump();
-        std::string hdr = "SearchCombineRequest(table=" + table_name_ + ")";
+        std::string hdr = "SearchCombineRequest(collection=" + collection_name_ + ")";
 
         TimeRecorderAuto rc(hdr);
 
-        // step 1: check table existence
-        // only process root table, ignore partition table
-        engine::meta::TableSchema table_schema;
-        table_schema.table_id_ = table_name_;
-        auto status = DBWrapper::DB()->DescribeTable(table_schema);
+        // step 1: check collection existence
+        // only process root collection, ignore partition collection
+        engine::meta::CollectionSchema collection_schema;
+        collection_schema.collection_id_ = collection_name_;
+        auto status = DBWrapper::DB()->DescribeCollection(collection_schema);
+
         if (!status.ok()) {
             if (status.code() == DB_NOT_FOUND) {
-                status = Status(SERVER_TABLE_NOT_EXIST, TableNotExistMsg(table_name_));
+                status = Status(SERVER_COLLECTION_NOT_EXIST, CollectionNotExistMsg(collection_name_));
                 FreeRequests(status);
                 return status;
             } else {
@@ -245,8 +255,8 @@ SearchCombineRequest::OnExecute() {
                 return status;
             }
         } else {
-            if (!table_schema.owner_table_.empty()) {
-                status = Status(SERVER_INVALID_TABLE_NAME, TableNotExistMsg(table_name_));
+            if (!collection_schema.owner_collection_.empty()) {
+                status = Status(SERVER_INVALID_COLLECTION_NAME, CollectionNotExistMsg(collection_name_));
                 FreeRequests(status);
                 return status;
             }
@@ -265,7 +275,7 @@ SearchCombineRequest::OnExecute() {
                 continue;
             }
 
-            status = ValidationUtil::ValidateSearchParams(extra_params_, table_schema, request->TopK());
+            status = ValidationUtil::ValidateSearchParams(extra_params_, collection_schema, request->TopK());
             if (!status.ok()) {
                 // check failed, erase request and let it return error status
                 FreeRequest(request, status);
@@ -273,7 +283,7 @@ SearchCombineRequest::OnExecute() {
                 continue;
             }
 
-            status = ValidationUtil::ValidateVectorData(request->VectorsData(), table_schema);
+            status = ValidationUtil::ValidateVectorData(request->VectorsData(), collection_schema);
             if (!status.ok()) {
                 // check failed, erase request and let it return error status
                 FreeRequest(request, status);
@@ -315,7 +325,7 @@ SearchCombineRequest::OnExecute() {
         }
         vectors_data_.vector_count_ = total_count;
 
-        uint16_t dimension = table_schema.dimension_;
+        uint16_t dimension = collection_schema.dimension_;
         bool is_float = true;
         if (!first_request->VectorsData().float_data_.empty()) {
             vectors_data_.float_data_.resize(total_count * dimension);
@@ -352,7 +362,7 @@ SearchCombineRequest::OnExecute() {
             context_list.CreateChild(request_list_, "Combine Query");
 
             if (file_id_list_.empty()) {
-                status = DBWrapper::DB()->Query(nullptr, table_name_, partition_list, (size_t)search_topk_,
+                status = DBWrapper::DB()->Query(nullptr, collection_name_, partition_list, (size_t)search_topk_,
                                                 extra_params_, vectors_data_, result_ids, result_distances);
             } else {
                 status = DBWrapper::DB()->QueryByFileID(nullptr, file_id_list, (size_t)search_topk_, extra_params_,
@@ -381,6 +391,7 @@ SearchCombineRequest::OnExecute() {
             int64_t topk = request->TopK();
             uint64_t element_cnt = count * topk;
             TopKQueryResult& result = request->QueryResult();
+            result.row_num_ = count;
             result.id_list_.resize(element_cnt);
             result.distance_list_.resize(element_cnt);
             memcpy(result.id_list_.data(), result_ids.data() + offset, element_cnt * sizeof(int64_t));
