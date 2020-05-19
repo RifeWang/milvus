@@ -38,7 +38,7 @@ S3ClientWrapper::StartService() {
     CONFIG_CHECK(config.GetStorageConfigS3Enable(s3_enable));
     fiu_do_on("S3ClientWrapper.StartService.s3_disable", s3_enable = false);
     if (!s3_enable) {
-        STORAGE_LOG_INFO << "S3 not enabled!";
+        LOG_STORAGE_INFO_ << "S3 not enabled!";
         return Status::OK();
     }
 
@@ -72,9 +72,7 @@ S3ClientWrapper::StartService() {
 
 void
 S3ClientWrapper::StopService() {
-    if (client_ptr_ != nullptr) {
-        client_ptr_ = nullptr;
-    }
+    client_ptr_ = nullptr;
     Aws::ShutdownAPI(options_);
 }
 
@@ -89,12 +87,12 @@ S3ClientWrapper::CreateBucket() {
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
         if (err.GetErrorType() != Aws::S3::S3Errors::BUCKET_ALREADY_OWNED_BY_YOU) {
-            STORAGE_LOG_ERROR << "ERROR: CreateBucket: " << err.GetExceptionName() << ": " << err.GetMessage();
+            LOG_STORAGE_ERROR_ << "ERROR: CreateBucket: " << err.GetExceptionName() << ": " << err.GetMessage();
             return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
         }
     }
 
-    STORAGE_LOG_DEBUG << "CreateBucket '" << s3_bucket_ << "' successfully!";
+    LOG_STORAGE_DEBUG_ << "CreateBucket '" << s3_bucket_ << "' successfully!";
     return Status::OK();
 }
 
@@ -108,11 +106,11 @@ S3ClientWrapper::DeleteBucket() {
     fiu_do_on("S3ClientWrapper.DeleteBucket.outcome.fail", outcome = Aws::S3::Model::DeleteBucketOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: DeleteBucket: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: DeleteBucket: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
-    STORAGE_LOG_DEBUG << "DeleteBucket '" << s3_bucket_ << "' successfully!";
+    LOG_STORAGE_DEBUG_ << "DeleteBucket '" << s3_bucket_ << "' successfully!";
     return Status::OK();
 }
 
@@ -121,7 +119,7 @@ S3ClientWrapper::PutObjectFile(const std::string& object_name, const std::string
     struct stat buffer;
     if (stat(file_path.c_str(), &buffer) != 0) {
         std::string str = "File '" + file_path + "' not exist!";
-        STORAGE_LOG_ERROR << "ERROR: " << str;
+        LOG_STORAGE_ERROR_ << "ERROR: " << str;
         return Status(SERVER_UNEXPECTED_ERROR, str);
     }
 
@@ -137,11 +135,11 @@ S3ClientWrapper::PutObjectFile(const std::string& object_name, const std::string
     fiu_do_on("S3ClientWrapper.PutObjectFile.outcome.fail", outcome = Aws::S3::Model::PutObjectOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: PutObject: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: PutObject: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
-    STORAGE_LOG_DEBUG << "PutObjectFile '" << file_path << "' successfully!";
+    LOG_STORAGE_DEBUG_ << "PutObjectFile '" << file_path << "' successfully!";
     return Status::OK();
 }
 
@@ -159,11 +157,11 @@ S3ClientWrapper::PutObjectStr(const std::string& object_name, const std::string&
     fiu_do_on("S3ClientWrapper.PutObjectStr.outcome.fail", outcome = Aws::S3::Model::PutObjectOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: PutObject: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: PutObject: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
-    STORAGE_LOG_DEBUG << "PutObjectStr successfully!";
+    LOG_STORAGE_DEBUG_ << "PutObjectStr successfully!";
     return Status::OK();
 }
 
@@ -177,7 +175,7 @@ S3ClientWrapper::GetObjectFile(const std::string& object_name, const std::string
     fiu_do_on("S3ClientWrapper.GetObjectFile.outcome.fail", outcome = Aws::S3::Model::GetObjectOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: GetObject: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: GetObject: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
@@ -186,7 +184,7 @@ S3ClientWrapper::GetObjectFile(const std::string& object_name, const std::string
     output_file << retrieved_file.rdbuf();
     output_file.close();
 
-    STORAGE_LOG_DEBUG << "GetObjectFile '" << file_path << "' successfully!";
+    LOG_STORAGE_DEBUG_ << "GetObjectFile '" << file_path << "' successfully!";
     return Status::OK();
 }
 
@@ -200,7 +198,7 @@ S3ClientWrapper::GetObjectStr(const std::string& object_name, std::string& conte
     fiu_do_on("S3ClientWrapper.GetObjectStr.outcome.fail", outcome = Aws::S3::Model::GetObjectOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: GetObject: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: GetObject: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
@@ -209,7 +207,7 @@ S3ClientWrapper::GetObjectStr(const std::string& object_name, std::string& conte
     ss << retrieved_file.rdbuf();
     content = std::move(ss.str());
 
-    STORAGE_LOG_DEBUG << "GetObjectStr successfully!";
+    LOG_STORAGE_DEBUG_ << "GetObjectStr successfully!";
     return Status::OK();
 }
 
@@ -227,7 +225,7 @@ S3ClientWrapper::ListObjects(std::vector<std::string>& object_list, const std::s
     fiu_do_on("S3ClientWrapper.ListObjects.outcome.fail", outcome = Aws::S3::Model::ListObjectsOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: ListObjects: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: ListObjects: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
@@ -238,9 +236,9 @@ S3ClientWrapper::ListObjects(std::vector<std::string>& object_list, const std::s
     }
 
     if (marker.empty()) {
-        STORAGE_LOG_DEBUG << "ListObjects '" << s3_bucket_ << "' successfully!";
+        LOG_STORAGE_DEBUG_ << "ListObjects '" << s3_bucket_ << "' successfully!";
     } else {
-        STORAGE_LOG_DEBUG << "ListObjects '" << s3_bucket_ << ":" << marker << "' successfully!";
+        LOG_STORAGE_DEBUG_ << "ListObjects '" << s3_bucket_ << ":" << marker << "' successfully!";
     }
     return Status::OK();
 }
@@ -255,11 +253,11 @@ S3ClientWrapper::DeleteObject(const std::string& object_name) {
     fiu_do_on("S3ClientWrapper.DeleteObject.outcome.fail", outcome = Aws::S3::Model::DeleteObjectOutcome());
     if (!outcome.IsSuccess()) {
         auto err = outcome.GetError();
-        STORAGE_LOG_ERROR << "ERROR: DeleteObject: " << err.GetExceptionName() << ": " << err.GetMessage();
+        LOG_STORAGE_ERROR_ << "ERROR: DeleteObject: " << err.GetExceptionName() << ": " << err.GetMessage();
         return Status(SERVER_UNEXPECTED_ERROR, err.GetMessage());
     }
 
-    STORAGE_LOG_DEBUG << "DeleteObject '" << object_name << "' successfully!";
+    LOG_STORAGE_DEBUG_ << "DeleteObject '" << object_name << "' successfully!";
     return Status::OK();
 }
 

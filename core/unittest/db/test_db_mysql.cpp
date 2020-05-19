@@ -27,7 +27,7 @@ namespace {
 static const char* COLLECTION_NAME = "test_group";
 static constexpr int64_t COLLECTION_DIM = 256;
 static constexpr int64_t VECTOR_COUNT = 25000;
-static constexpr int64_t INSERT_LOOP = 1000;
+static constexpr int64_t INSERT_LOOP = 100;
 
 milvus::engine::meta::CollectionSchema
 BuildCollectionSchema() {
@@ -92,7 +92,7 @@ TEST_F(MySqlDBTest, DB_TEST) {
 
             std::vector<std::string> tags;
             stat = db_->Query(dummy_context_, COLLECTION_NAME, tags, k, json_params, qxb, result_ids, result_distances);
-            ss << "Search " << j << " With Size " << count / milvus::engine::M << " M";
+            ss << "Search " << j << " With Size " << count / milvus::engine::MB << " MB";
             STOP_TIMER(ss.str());
 
             ASSERT_TRUE(stat.ok());
@@ -199,11 +199,11 @@ TEST_F(MySqlDBTest, ARHIVE_DISK_CHECK) {
     milvus::engine::meta::CollectionSchema collection_info = BuildCollectionSchema();
     auto stat = db_->CreateCollection(collection_info);
 
-    std::vector<milvus::engine::meta::CollectionSchema> table_schema_array;
-    stat = db_->AllCollections(table_schema_array);
+    std::vector<milvus::engine::meta::CollectionSchema> collection_schema_array;
+    stat = db_->AllCollections(collection_schema_array);
     ASSERT_TRUE(stat.ok());
     bool bfound = false;
-    for (auto& schema : table_schema_array) {
+    for (auto& schema : collection_schema_array) {
         if (schema.collection_id_ == COLLECTION_NAME) {
             bfound = true;
             break;
@@ -213,11 +213,11 @@ TEST_F(MySqlDBTest, ARHIVE_DISK_CHECK) {
 
     fiu_init(0);
     FIU_ENABLE_FIU("MySQLMetaImpl.AllCollection.null_connection");
-    stat = db_->AllCollections(table_schema_array);
+    stat = db_->AllCollections(collection_schema_array);
     ASSERT_FALSE(stat.ok());
 
     FIU_ENABLE_FIU("MySQLMetaImpl.AllCollection.throw_exception");
-    stat = db_->AllCollections(table_schema_array);
+    stat = db_->AllCollections(collection_schema_array);
     ASSERT_FALSE(stat.ok());
     fiu_disable("MySQLMetaImpl.AllCollection.null_connection");
     fiu_disable("MySQLMetaImpl.AllCollection.throw_exception");
@@ -250,7 +250,7 @@ TEST_F(MySqlDBTest, ARHIVE_DISK_CHECK) {
 
     db_->Size(size);
     LOG(DEBUG) << "size=" << size;
-    ASSERT_LE(size, 1 * milvus::engine::G);
+    ASSERT_LE(size, 1 * milvus::engine::GB);
 
     FIU_ENABLE_FIU("MySQLMetaImpl.Size.null_connection");
     stat = db_->Size(size);
@@ -362,7 +362,7 @@ TEST_F(MySqlDBTest, PARTITION_TEST) {
         milvus::engine::CollectionIndex index;
         index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFFLAT;
         index.metric_type_ = (int)milvus::engine::MetricType::L2;
-        stat = db_->CreateIndex(collection_info.collection_id_, index);
+        stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
         ASSERT_TRUE(stat.ok());
 
         uint64_t row_count = 0;

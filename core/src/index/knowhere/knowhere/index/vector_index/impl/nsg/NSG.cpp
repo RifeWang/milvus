@@ -19,6 +19,7 @@
 #include <string>
 #include <utility>
 
+#include "faiss/BuilderSuspend.h"
 #include "knowhere/common/Exception.h"
 #include "knowhere/common/Log.h"
 #include "knowhere/common/Timer.h"
@@ -74,8 +75,8 @@ NsgIndex::Build_with_ids(size_t nb, const float* data, const int64_t* ids, const
     for (size_t i = 0; i < ntotal; ++i) {
         total_degree += nsg[i].size();
     }
-    KNOWHERE_LOG_DEBUG << "Graph physical size: " << total_degree * sizeof(node_t) / 1024 / 1024 << "m";
-    KNOWHERE_LOG_DEBUG << "Average degree: " << total_degree / ntotal;
+    LOG_KNOWHERE_DEBUG_ << "Graph physical size: " << total_degree * sizeof(node_t) / 1024 / 1024 << "m";
+    LOG_KNOWHERE_DEBUG_ << "Average degree: " << total_degree / ntotal;
 
     // Debug code
     // for (size_t i = 0; i < ntotal; i++) {
@@ -432,6 +433,7 @@ NsgIndex::Link() {
         boost::dynamic_bitset<> flags{ntotal, 0};
 #pragma omp for schedule(dynamic, 100)
         for (size_t n = 0; n < ntotal; ++n) {
+            faiss::BuilderSuspend::check_wait();
             fullset.clear();
             temp.clear();
             flags.reset();
@@ -461,6 +463,7 @@ NsgIndex::Link() {
     std::vector<std::mutex> mutex_vec(ntotal);
 #pragma omp for schedule(dynamic, 100)
     for (unsigned n = 0; n < ntotal; ++n) {
+        faiss::BuilderSuspend::check_wait();
         InterInsert(n, mutex_vec, cut_graph_dist);
     }
     delete[] cut_graph_dist;
@@ -611,6 +614,7 @@ NsgIndex::CheckConnectivity() {
     int64_t linked_count = 0;
 
     while (linked_count < static_cast<int64_t>(ntotal)) {
+        faiss::BuilderSuspend::check_wait();
         DFS(root, has_linked, linked_count);
         if (linked_count >= static_cast<int64_t>(ntotal)) {
             break;

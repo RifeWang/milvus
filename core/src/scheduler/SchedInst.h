@@ -12,18 +12,19 @@
 #pragma once
 
 #include "BuildMgr.h"
+#include "CPUBuilder.h"
 #include "JobMgr.h"
 #include "ResourceMgr.h"
 #include "Scheduler.h"
 #include "Utils.h"
-#include "optimizer/BuildIndexPass.h"
-#include "optimizer/FaissFlatPass.h"
-#include "optimizer/FaissIVFFlatPass.h"
-#include "optimizer/FaissIVFPQPass.h"
-#include "optimizer/FaissIVFSQ8HPass.h"
-#include "optimizer/FaissIVFSQ8Pass.h"
-#include "optimizer/FallbackPass.h"
-#include "optimizer/Optimizer.h"
+#include "selector/BuildIndexPass.h"
+#include "selector/FaissFlatPass.h"
+#include "selector/FaissIVFFlatPass.h"
+#include "selector/FaissIVFPQPass.h"
+#include "selector/FaissIVFSQ8HPass.h"
+#include "selector/FaissIVFSQ8Pass.h"
+#include "selector/FallbackPass.h"
+#include "selector/Optimizer.h"
 
 #include <memory>
 #include <mutex>
@@ -110,14 +111,14 @@ class OptimizerInst {
                     for (auto build_id : build_gpus) {
                         build_msg.append(" gpu" + std::to_string(build_id));
                     }
-                    SERVER_LOG_DEBUG << LogOut("[%s][%d] %s", "search", 0, build_msg.c_str());
+                    LOG_SERVER_DEBUG_ << LogOut("[%s][%d] %s", "search", 0, build_msg.c_str());
 
                     std::string search_msg = "Search gpu:";
                     for (auto search_id : search_gpus) {
                         search_msg.append(" gpu" + std::to_string(search_id));
                     }
                     search_msg.append(". gpu_search_threshold:" + std::to_string(gpu_search_threshold));
-                    SERVER_LOG_DEBUG << LogOut("[%s][%d] %s", "search", 0, build_msg.c_str());
+                    LOG_SERVER_DEBUG_ << LogOut("[%s][%d] %s", "search", 0, build_msg.c_str());
 
                     pass_list.push_back(std::make_shared<BuildIndexPass>());
                     pass_list.push_back(std::make_shared<FaissFlatPass>());
@@ -154,6 +155,24 @@ class BuildMgrInst {
 
  private:
     static BuildMgrPtr instance;
+    static std::mutex mutex_;
+};
+
+class CPUBuilderInst {
+ public:
+    static CPUBuilderPtr
+    GetInstance() {
+        if (instance == nullptr) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (instance == nullptr) {
+                instance = std::make_shared<CPUBuilder>();
+            }
+        }
+        return instance;
+    }
+
+ private:
+    static CPUBuilderPtr instance;
     static std::mutex mutex_;
 };
 

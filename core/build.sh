@@ -16,6 +16,7 @@ FAISS_ROOT="" #FAISS root path
 FAISS_SOURCE="BUNDLED"
 WITH_PROMETHEUS="ON"
 FIU_ENABLE="OFF"
+BUILD_OPENBLAS="ON"
 
 while getopts "p:d:t:f:ulrcghzmei" arg; do
   case $arg in
@@ -112,14 +113,15 @@ CMAKE_CMD="cmake \
 -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
 -DFAISS_ROOT=${FAISS_ROOT} \
 -DFAISS_SOURCE=${FAISS_SOURCE} \
+-DOpenBLAS_SOURCE=AUTO \
 -DCMAKE_CUDA_COMPILER=${CUDA_COMPILER} \
 -DBUILD_COVERAGE=${BUILD_COVERAGE} \
 -DMILVUS_DB_PATH=${DB_PATH} \
--DMILVUS_ENABLE_PROFILING=${PROFILING} \
+-DENABLE_CPU_PROFILING=${PROFILING} \
 -DMILVUS_GPU_VERSION=${GPU_VERSION} \
 -DFAISS_WITH_MKL=${WITH_MKL} \
 -DMILVUS_WITH_PROMETHEUS=${WITH_PROMETHEUS} \
--DMILVUS_WITH_FIU=${FIU_ENABLE}
+-DMILVUS_WITH_FIU=${FIU_ENABLE} \
 ../"
 echo ${CMAKE_CMD}
 ${CMAKE_CMD}
@@ -153,11 +155,6 @@ if [[ ${RUN_CPPLINT} == "ON" ]]; then
 #    fi
 #    echo "clang-tidy check passed!"
 else
-
-  # strip binary symbol
-  if [[ ${BUILD_TYPE} != "Debug" ]]; then
-    strip src/milvus_server
-  fi
 
   # compile and build
   make -j 8 install || exit 1

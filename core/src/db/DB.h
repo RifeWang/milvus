@@ -13,11 +13,14 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "Options.h"
 #include "Types.h"
+#include "context/HybridSearchContext.h"
 #include "meta/Meta.h"
+#include "query/GeneralQuery.h"
 #include "server/context/Context.h"
 #include "utils/Status.h"
 
@@ -53,16 +56,16 @@ class DB {
     DescribeCollection(meta::CollectionSchema& table_schema_) = 0;
 
     virtual Status
-    HasCollection(const std::string& collection_id, bool& has_or_not_) = 0;
+    HasCollection(const std::string& collection_id, bool& has_or_not) = 0;
 
     virtual Status
-    HasNativeCollection(const std::string& collection_id, bool& has_or_not_) = 0;
+    HasNativeCollection(const std::string& collection_id, bool& has_or_not) = 0;
 
     virtual Status
     AllCollections(std::vector<meta::CollectionSchema>& table_schema_array) = 0;
 
     virtual Status
-    GetCollectionInfo(const std::string& collection_id, CollectionInfo& collection_info) = 0;
+    GetCollectionInfo(const std::string& collection_id, std::string& collection_info) = 0;
 
     virtual Status
     GetCollectionRowCount(const std::string& collection_id, uint64_t& row_count) = 0;
@@ -76,6 +79,9 @@ class DB {
     virtual Status
     CreatePartition(const std::string& collection_id, const std::string& partition_name,
                     const std::string& partition_tag) = 0;
+
+    virtual Status
+    HasPartition(const std::string& collection_id, const std::string& tag, bool& has_or_not) = 0;
 
     virtual Status
     DropPartition(const std::string& partition_name) = 0;
@@ -102,10 +108,11 @@ class DB {
     Flush() = 0;
 
     virtual Status
-    Compact(const std::string& collection_id) = 0;
+    Compact(const std::string& collection_id, double threshold = 0.0) = 0;
 
     virtual Status
-    GetVectorByID(const std::string& collection_id, const IDNumber& vector_id, VectorsData& vector) = 0;
+    GetVectorsByID(const std::string& collection_id, const IDNumbers& id_array,
+                   std::vector<engine::VectorsData>& vectors) = 0;
 
     virtual Status
     GetVectorIDs(const std::string& collection_id, const std::string& segment_id, IDNumbers& vector_ids) = 0;
@@ -114,9 +121,9 @@ class DB {
     //    Merge(const std::set<std::string>& table_ids) = 0;
 
     virtual Status
-    QueryByID(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
-              const std::vector<std::string>& partition_tags, uint64_t k, const milvus::json& extra_params,
-              IDNumber vector_id, ResultIds& result_ids, ResultDistances& result_distances) = 0;
+    QueryByIDs(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+               const std::vector<std::string>& partition_tags, uint64_t k, const milvus::json& extra_params,
+               const IDNumbers& id_array, ResultIds& result_ids, ResultDistances& result_distances) = 0;
 
     virtual Status
     Query(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
@@ -132,7 +139,8 @@ class DB {
     Size(uint64_t& result) = 0;
 
     virtual Status
-    CreateIndex(const std::string& collection_id, const CollectionIndex& index) = 0;
+    CreateIndex(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                const CollectionIndex& index) = 0;
 
     virtual Status
     DescribeIndex(const std::string& collection_id, CollectionIndex& index) = 0;
@@ -142,6 +150,24 @@ class DB {
 
     virtual Status
     DropAll() = 0;
+
+    virtual Status
+    CreateHybridCollection(meta::CollectionSchema& collection_schema, meta::hybrid::FieldsSchema& fields_schema) = 0;
+
+    virtual Status
+    DescribeHybridCollection(meta::CollectionSchema& collection_schema, meta::hybrid::FieldsSchema& fields_schema) = 0;
+
+    virtual Status
+    InsertEntities(const std::string& collection_id, const std::string& partition_tag,
+                   const std::vector<std::string>& field_names, Entity& entity,
+                   std::unordered_map<std::string, meta::hybrid::DataType>& field_types) = 0;
+
+    virtual Status
+    HybridQuery(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                const std::vector<std::string>& partition_tags, context::HybridSearchContextPtr hybrid_search_context,
+                query::GeneralQueryPtr general_query,
+                std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
+                engine::ResultIds& result_ids, engine::ResultDistances& result_distances) = 0;
 };  // DB
 
 using DBPtr = std::shared_ptr<DB>;

@@ -134,7 +134,6 @@ TEST_F(ConfigTest, CONFIG_TEST) {
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_VALID_TEST) {
-    std::string config_path(CONFIG_PATH);
     milvus::server::Config& config = milvus::server::Config::GetInstance();
     std::string str_val;
     int64_t int64_val;
@@ -209,35 +208,35 @@ TEST_F(ConfigTest, SERVER_CONFIG_VALID_TEST) {
     ASSERT_TRUE(config.GetStorageConfigSecondaryPath(str_val).ok());
     ASSERT_TRUE(str_val == storage_secondary_path);
 
-    bool storage_s3_enable = true;
-    ASSERT_TRUE(config.SetStorageConfigS3Enable(std::to_string(storage_s3_enable)).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3Enable(bool_val).ok());
-    ASSERT_TRUE(bool_val == storage_s3_enable);
-
-    std::string storage_s3_addr = "192.168.1.100";
-    ASSERT_TRUE(config.SetStorageConfigS3Address(storage_s3_addr).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3Address(str_val).ok());
-    ASSERT_TRUE(str_val == storage_s3_addr);
-
-    std::string storage_s3_port = "12345";
-    ASSERT_TRUE(config.SetStorageConfigS3Port(storage_s3_port).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3Port(str_val).ok());
-    ASSERT_TRUE(str_val == storage_s3_port);
-
-    std::string storage_s3_access_key = "minioadmin";
-    ASSERT_TRUE(config.SetStorageConfigS3AccessKey(storage_s3_access_key).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3AccessKey(str_val).ok());
-    ASSERT_TRUE(str_val == storage_s3_access_key);
-
-    std::string storage_s3_secret_key = "minioadmin";
-    ASSERT_TRUE(config.SetStorageConfigS3SecretKey(storage_s3_secret_key).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3SecretKey(str_val).ok());
-    ASSERT_TRUE(str_val == storage_s3_secret_key);
-
-    std::string storage_s3_bucket = "s3bucket";
-    ASSERT_TRUE(config.SetStorageConfigS3Bucket(storage_s3_bucket).ok());
-    ASSERT_TRUE(config.GetStorageConfigS3Bucket(str_val).ok());
-    ASSERT_TRUE(str_val == storage_s3_bucket);
+//    bool storage_s3_enable = true;
+//    ASSERT_TRUE(config.SetStorageConfigS3Enable(std::to_string(storage_s3_enable)).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3Enable(bool_val).ok());
+//    ASSERT_TRUE(bool_val == storage_s3_enable);
+//
+//    std::string storage_s3_addr = "192.168.1.100";
+//    ASSERT_TRUE(config.SetStorageConfigS3Address(storage_s3_addr).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3Address(str_val).ok());
+//    ASSERT_TRUE(str_val == storage_s3_addr);
+//
+//    std::string storage_s3_port = "12345";
+//    ASSERT_TRUE(config.SetStorageConfigS3Port(storage_s3_port).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3Port(str_val).ok());
+//    ASSERT_TRUE(str_val == storage_s3_port);
+//
+//    std::string storage_s3_access_key = "minioadmin";
+//    ASSERT_TRUE(config.SetStorageConfigS3AccessKey(storage_s3_access_key).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3AccessKey(str_val).ok());
+//    ASSERT_TRUE(str_val == storage_s3_access_key);
+//
+//    std::string storage_s3_secret_key = "minioadmin";
+//    ASSERT_TRUE(config.SetStorageConfigS3SecretKey(storage_s3_secret_key).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3SecretKey(str_val).ok());
+//    ASSERT_TRUE(str_val == storage_s3_secret_key);
+//
+//    std::string storage_s3_bucket = "s3bucket";
+//    ASSERT_TRUE(config.SetStorageConfigS3Bucket(storage_s3_bucket).ok());
+//    ASSERT_TRUE(config.GetStorageConfigS3Bucket(str_val).ok());
+//    ASSERT_TRUE(str_val == storage_s3_bucket);
 
     /* metric config */
     bool metric_enable_monitor = false;
@@ -287,10 +286,10 @@ TEST_F(ConfigTest, SERVER_CONFIG_VALID_TEST) {
     ASSERT_TRUE(config.GetEngineConfigOmpThreadNum(int64_val).ok());
     ASSERT_TRUE(int64_val == engine_omp_thread_num);
 
-    bool engine_use_avx512 = false;
-    ASSERT_TRUE(config.SetEngineConfigUseAVX512(std::to_string(engine_use_avx512)).ok());
-    ASSERT_TRUE(config.GetEngineConfigUseAVX512(bool_val).ok());
-    ASSERT_TRUE(bool_val == engine_use_avx512);
+    std::string engine_simd_type = "sse";
+    ASSERT_TRUE(config.SetEngineConfigSimdType(engine_simd_type).ok());
+    ASSERT_TRUE(config.GetEngineConfigSimdType(str_val).ok());
+    ASSERT_TRUE(str_val == engine_simd_type);
 
 #ifdef MILVUS_GPU_VERSION
     int64_t engine_gpu_search_threshold = 800;
@@ -359,6 +358,52 @@ TEST_F(ConfigTest, SERVER_CONFIG_VALID_TEST) {
     ASSERT_TRUE(config.SetWalConfigWalPath(wal_path).ok());
     ASSERT_TRUE(config.GetWalConfigWalPath(str_val).ok());
     ASSERT_TRUE(str_val == wal_path);
+
+    /* logs config */
+    bool logs_trace_enable = false;
+    ASSERT_TRUE(config.SetLogsTraceEnable(std::to_string(logs_trace_enable)).ok());
+    ASSERT_TRUE(config.GetLogsTraceEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_trace_enable);
+
+    bool logs_debug_enable = false;
+    ASSERT_TRUE(config.SetLogsDebugEnable(std::to_string(logs_debug_enable)).ok());
+    ASSERT_TRUE(config.GetLogsDebugEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_debug_enable);
+
+    bool logs_info_enable = false;
+    ASSERT_TRUE(config.SetLogsTraceEnable(std::to_string(logs_info_enable)).ok());
+    ASSERT_TRUE(config.GetLogsTraceEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_info_enable);
+
+    bool logs_warning_enable = false;
+    ASSERT_TRUE(config.SetLogsDebugEnable(std::to_string(logs_warning_enable)).ok());
+    ASSERT_TRUE(config.GetLogsDebugEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_warning_enable);
+
+    bool logs_error_enable = false;
+    ASSERT_TRUE(config.SetLogsTraceEnable(std::to_string(logs_error_enable)).ok());
+    ASSERT_TRUE(config.GetLogsTraceEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_error_enable);
+
+    bool logs_fatal_enable = false;
+    ASSERT_TRUE(config.SetLogsDebugEnable(std::to_string(logs_fatal_enable)).ok());
+    ASSERT_TRUE(config.GetLogsDebugEnable(bool_val).ok());
+    ASSERT_TRUE(bool_val == logs_fatal_enable);
+
+    std::string logs_path = "/tmp/aaa/logs";
+    ASSERT_TRUE(config.SetLogsPath(logs_path).ok());
+    ASSERT_TRUE(config.GetLogsPath(str_val).ok());
+    ASSERT_TRUE(str_val == logs_path);
+
+    int64_t logs_max_log_file_size = 1000;
+    ASSERT_TRUE(config.SetLogsMaxLogFileSize(std::to_string(logs_max_log_file_size)).ok());
+    ASSERT_TRUE(config.GetLogsMaxLogFileSize(int64_val).ok());
+    ASSERT_TRUE(int64_val == logs_max_log_file_size);
+
+    int64_t logs_log_rotate_num = 100;
+    ASSERT_TRUE(config.SetLogsLogRotateNum(std::to_string(logs_log_rotate_num)).ok());
+    ASSERT_TRUE(config.GetLogsLogRotateNum(int64_val).ok());
+    ASSERT_TRUE(int64_val == logs_log_rotate_num);
 }
 
 std::string
@@ -374,14 +419,13 @@ gen_set_command(const std::string& parent_node, const std::string& child_node, c
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_CLI_TEST) {
-    std::string config_path(CONFIG_PATH);
-    milvus::Status s;
-
     std::string conf_file = std::string(CONFIG_PATH) + VALID_CONFIG_FILE;
     milvus::server::Config& config = milvus::server::Config::GetInstance();
 
-    auto status = config.LoadConfigFile(conf_file);
-    ASSERT_TRUE(status.ok()) << status.message();
+    auto s = config.LoadConfigFile(conf_file);
+    ASSERT_TRUE(s.ok()) << s.message();
+    s = config.ResetDefaultConfig();
+    ASSERT_TRUE(s.ok());
 
     std::string get_cmd, set_cmd;
     std::string result, dummy;
@@ -417,9 +461,9 @@ TEST_F(ConfigTest, SERVER_CONFIG_CLI_TEST) {
     ASSERT_TRUE(s.ok());
 
     /* storage config */
-    std::string storage_s3_enable = "true";
-    get_cmd = gen_get_command(ms::CONFIG_STORAGE, ms::CONFIG_STORAGE_S3_ENABLE);
-    set_cmd = gen_set_command(ms::CONFIG_STORAGE, ms::CONFIG_STORAGE_S3_ENABLE, storage_s3_enable);
+    std::string storage_primary_path = "/tmp/milvus1";
+    get_cmd = gen_get_command(ms::CONFIG_STORAGE, ms::CONFIG_STORAGE_PRIMARY_PATH);
+    set_cmd = gen_set_command(ms::CONFIG_STORAGE, ms::CONFIG_STORAGE_PRIMARY_PATH, storage_primary_path);
     s = config.ProcessConfigCli(dummy, set_cmd);
     ASSERT_TRUE(s.ok());
     s = config.ProcessConfigCli(result, get_cmd);
@@ -481,14 +525,14 @@ TEST_F(ConfigTest, SERVER_CONFIG_CLI_TEST) {
     ASSERT_TRUE(s.ok());
     ASSERT_TRUE(result == engine_omp_thread_num);
 
-    std::string engine_use_avx512 = "true";
-    get_cmd = gen_get_command(ms::CONFIG_ENGINE, ms::CONFIG_ENGINE_USE_AVX512);
-    set_cmd = gen_set_command(ms::CONFIG_ENGINE, ms::CONFIG_ENGINE_USE_AVX512, engine_use_avx512);
+    std::string engine_simd_type = "sse";
+    get_cmd = gen_get_command(ms::CONFIG_ENGINE, ms::CONFIG_ENGINE_SIMD_TYPE);
+    set_cmd = gen_set_command(ms::CONFIG_ENGINE, ms::CONFIG_ENGINE_SIMD_TYPE, engine_simd_type);
     s = config.ProcessConfigCli(dummy, set_cmd);
     ASSERT_TRUE(s.ok());
     s = config.ProcessConfigCli(result, get_cmd);
     ASSERT_TRUE(s.ok());
-    ASSERT_TRUE(result == engine_use_avx512);
+    ASSERT_TRUE(result == engine_simd_type);
 
 #ifdef MILVUS_GPU_VERSION
     std::string engine_gpu_search_threshold = "800";
@@ -542,13 +586,31 @@ TEST_F(ConfigTest, SERVER_CONFIG_CLI_TEST) {
     std::string build_index_resources = "gpu0";
     get_cmd = gen_get_command(ms::CONFIG_GPU_RESOURCE, ms::CONFIG_GPU_RESOURCE_BUILD_INDEX_RESOURCES);
     set_cmd =
-        gen_set_command(ms::CONFIG_GPU_RESOURCE, ms::CONFIG_GPU_RESOURCE_BUILD_INDEX_RESOURCES, build_index_resources);
+      gen_set_command(ms::CONFIG_GPU_RESOURCE, ms::CONFIG_GPU_RESOURCE_BUILD_INDEX_RESOURCES, build_index_resources);
     s = config.ProcessConfigCli(dummy, set_cmd);
     ASSERT_TRUE(s.ok());
     s = config.ProcessConfigCli(result, get_cmd);
     ASSERT_TRUE(s.ok());
     ASSERT_TRUE(result == build_index_resources);
 #endif
+
+    /* wal config */
+    std::string wal_path = "/tmp/aaa/wal";
+    get_cmd = gen_get_command(ms::CONFIG_WAL, ms::CONFIG_WAL_WAL_PATH);
+    set_cmd = gen_set_command(ms::CONFIG_WAL, ms::CONFIG_WAL_WAL_PATH, wal_path);
+    s = config.ProcessConfigCli(dummy, set_cmd);
+    ASSERT_TRUE(s.ok());
+    s = config.ProcessConfigCli(result, get_cmd);
+    ASSERT_TRUE(s.ok());
+
+    /* logs config */
+    std::string logs_path = "/tmp/aaa/logs";
+    get_cmd = gen_get_command(ms::CONFIG_LOGS, ms::CONFIG_LOGS_PATH);
+    set_cmd = gen_set_command(ms::CONFIG_LOGS, ms::CONFIG_LOGS_PATH, logs_path);
+    s = config.ProcessConfigCli(dummy, set_cmd);
+    ASSERT_TRUE(s.ok());
+    s = config.ProcessConfigCli(result, get_cmd);
+    ASSERT_TRUE(s.ok());
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_INVALID_TEST) {
@@ -599,18 +661,18 @@ TEST_F(ConfigTest, SERVER_CONFIG_INVALID_TEST) {
     ASSERT_FALSE(config.SetStorageConfigSecondaryPath("../milvus,./zilliz").ok());
     ASSERT_FALSE(config.SetStorageConfigSecondaryPath("/home/^^__^^,/zilliz").ok());
 
-    ASSERT_FALSE(config.SetStorageConfigS3Enable("10").ok());
-
-    ASSERT_FALSE(config.SetStorageConfigS3Address("127.0.0").ok());
-
-    ASSERT_FALSE(config.SetStorageConfigS3Port("100").ok());
-    ASSERT_FALSE(config.SetStorageConfigS3Port("100000").ok());
-
-    ASSERT_FALSE(config.SetStorageConfigS3AccessKey("").ok());
-
-    ASSERT_FALSE(config.SetStorageConfigS3SecretKey("").ok());
-
-    ASSERT_FALSE(config.SetStorageConfigS3Bucket("").ok());
+//    ASSERT_FALSE(config.SetStorageConfigS3Enable("10").ok());
+//
+//    ASSERT_FALSE(config.SetStorageConfigS3Address("127.0.0").ok());
+//
+//    ASSERT_FALSE(config.SetStorageConfigS3Port("100").ok());
+//    ASSERT_FALSE(config.SetStorageConfigS3Port("100000").ok());
+//
+//    ASSERT_FALSE(config.SetStorageConfigS3AccessKey("").ok());
+//
+//    ASSERT_FALSE(config.SetStorageConfigS3SecretKey("").ok());
+//
+//    ASSERT_FALSE(config.SetStorageConfigS3Bucket("").ok());
 
     /* metric config */
     ASSERT_FALSE(config.SetMetricConfigEnableMonitor("Y").ok());
@@ -643,7 +705,7 @@ TEST_F(ConfigTest, SERVER_CONFIG_INVALID_TEST) {
     ASSERT_FALSE(config.SetEngineConfigOmpThreadNum("10000").ok());
     ASSERT_FALSE(config.SetEngineConfigOmpThreadNum("-10").ok());
 
-    ASSERT_FALSE(config.SetEngineConfigUseAVX512("N").ok());
+    ASSERT_FALSE(config.SetEngineConfigSimdType("None").ok());
 
 #ifdef MILVUS_GPU_VERSION
     ASSERT_FALSE(config.SetEngineConfigGpuSearchThreshold("-1").ok());
@@ -674,6 +736,19 @@ TEST_F(ConfigTest, SERVER_CONFIG_INVALID_TEST) {
     ASSERT_FALSE(config.SetWalConfigWalPath("").ok());
     ASSERT_FALSE(config.SetWalConfigBufferSize("-1").ok());
     ASSERT_FALSE(config.SetWalConfigBufferSize("a").ok());
+
+    /* wal config */
+    ASSERT_FALSE(config.SetLogsTraceEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsDebugEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsInfoEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsWarningEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsErrorEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsFatalEnable("invalid").ok());
+    ASSERT_FALSE(config.SetLogsPath("").ok());
+    ASSERT_FALSE(config.SetLogsMaxLogFileSize("-1").ok());
+    ASSERT_FALSE(config.SetLogsMaxLogFileSize("511").ok());
+    ASSERT_FALSE(config.SetLogsLogRotateNum("-1").ok());
+    ASSERT_FALSE(config.SetLogsLogRotateNum("1025").ok());
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_TEST) {
@@ -789,6 +864,11 @@ TEST_F(ConfigTest, SERVER_CONFIG_VALID_FAIL_TEST) {
     s = config.ValidateConfig();
     ASSERT_FALSE(s.ok());
     fiu_disable("check_config_omp_thread_num_fail");
+
+    fiu_enable("check_config_simd_type_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_config_simd_type_fail");
 
 #ifdef MILVUS_GPU_VERSION
     fiu_enable("check_config_gpu_search_threshold_fail", 1, NULL, 0);
@@ -914,6 +994,52 @@ TEST_F(ConfigTest, SERVER_CONFIG_VALID_FAIL_TEST) {
     s = config.ValidateConfig();
     ASSERT_FALSE(s.ok());
     fiu_disable("check_wal_path_fail");
+
+    /* logs config */
+    fiu_enable("check_logs_trace_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_trace_enable_fail");
+
+    fiu_enable("check_logs_debug_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_debug_enable_fail");
+
+    fiu_enable("check_logs_info_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_info_enable_fail");
+
+    fiu_enable("check_logs_warning_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_warning_enable_fail");
+
+    fiu_enable("check_logs_error_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_error_enable_fail");
+
+    fiu_enable("check_logs_fatal_enable_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_fatal_enable_fail");
+
+    fiu_enable("check_logs_path_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_path_fail");
+
+    fiu_enable("check_logs_max_log_file_size_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_max_log_file_size_fail");
+
+    fiu_enable("check_logs_log_rotate_num_fail", 1, NULL, 0);
+    s = config.ValidateConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_log_rotate_num_fail");
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_RESET_DEFAULT_CONFIG_FAIL_TEST) {
@@ -1023,6 +1149,11 @@ TEST_F(ConfigTest, SERVER_CONFIG_RESET_DEFAULT_CONFIG_FAIL_TEST) {
     ASSERT_FALSE(s.ok());
     fiu_disable("check_config_omp_thread_num_fail");
 
+    fiu_enable("check_config_simd_type_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_config_simd_type_fail");
+
 #ifdef MILVUS_GPU_VERSION
     fiu_enable("check_config_gpu_search_threshold_fail", 1, NULL, 0);
     s = config.ResetDefaultConfig();
@@ -1078,6 +1209,52 @@ TEST_F(ConfigTest, SERVER_CONFIG_RESET_DEFAULT_CONFIG_FAIL_TEST) {
     s = config.ResetDefaultConfig();
     ASSERT_FALSE(s.ok());
     fiu_disable("check_wal_path_fail");
+
+    /* logs config */
+    fiu_enable("check_logs_trace_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_trace_enable_fail");
+
+    fiu_enable("check_logs_debug_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_debug_enable_fail");
+
+    fiu_enable("check_logs_info_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_info_enable_fail");
+
+    fiu_enable("check_logs_warning_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_warning_enable_fail");
+
+    fiu_enable("check_logs_error_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_error_enable_fail");
+
+    fiu_enable("check_logs_fatal_enable_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_fatal_enable_fail");
+
+    fiu_enable("check_logs_path_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_path_fail");
+
+    fiu_enable("check_logs_max_log_file_size_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_max_log_file_size_fail");
+
+    fiu_enable("check_logs_log_rotate_num_fail", 1, NULL, 0);
+    s = config.ResetDefaultConfig();
+    ASSERT_FALSE(s.ok());
+    fiu_disable("check_logs_log_rotate_num_fail");
 }
 
 TEST_F(ConfigTest, SERVER_CONFIG_OTHER_CONFIGS_FAIL_TEST) {

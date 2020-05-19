@@ -15,6 +15,7 @@
 #include <cmath>
 #include <ctime>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "config/Config.h"
@@ -77,58 +78,6 @@ WebErrorMap(ErrorCode code) {
 }
 
 /////////////////////////////////// Private methods ///////////////////////////////////////
-Status
-WebRequestHandler::ParseQueryInteger(const OQueryParams& query_params, const std::string& key, int64_t& value,
-                                     bool nullable) {
-    auto query = query_params.get(key.c_str());
-    if (nullptr != query.get() && query->getSize() > 0) {
-        std::string value_str = query->std_str();
-        if (!ValidationUtil::ValidateStringIsNumber(value_str).ok()) {
-            return Status(ILLEGAL_QUERY_PARAM,
-                          "Query param \'offset\' is illegal, only non-negative integer supported");
-        }
-
-        value = std::stol(value_str);
-    } else if (!nullable) {
-        return Status(QUERY_PARAM_LOSS, "Query param \"" + key + "\" is required");
-    }
-
-    return Status::OK();
-}
-
-Status
-WebRequestHandler::ParseQueryStr(const OQueryParams& query_params, const std::string& key, std::string& value,
-                                 bool nullable) {
-    auto query = query_params.get(key.c_str());
-    if (nullptr != query.get() && query->getSize() > 0) {
-        value = query->std_str();
-    } else if (!nullable) {
-        return Status(QUERY_PARAM_LOSS, "Query param \"" + key + "\" is required");
-    }
-
-    return Status::OK();
-}
-
-Status
-WebRequestHandler::ParseQueryBool(const OQueryParams& query_params, const std::string& key, bool& value,
-                                  bool nullable) {
-    auto query = query_params.get(key.c_str());
-    if (nullptr != query.get() && query->getSize() > 0) {
-        std::string value_str = query->std_str();
-        if (!ValidationUtil::ValidateStringIsBool(value_str).ok()) {
-            return Status(ILLEGAL_QUERY_PARAM, "Query param \'all_required\' must be a bool");
-        }
-        value = value_str == "True" || value_str == "true";
-        return Status::OK();
-    }
-
-    if (!nullable) {
-        return Status(QUERY_PARAM_LOSS, "Query param \"" + key + "\" is required");
-    }
-
-    return Status::OK();
-}
-
 void
 WebRequestHandler::AddStatusToJson(nlohmann::json& json, int64_t code, const std::string& msg) {
     json["code"] = (int64_t)code;
@@ -136,33 +85,7 @@ WebRequestHandler::AddStatusToJson(nlohmann::json& json, int64_t code, const std
 }
 
 Status
-WebRequestHandler::ParseSegmentStat(const milvus::server::SegmentStat& seg_stat, nlohmann::json& json) {
-    json["segment_name"] = seg_stat.name_;
-    json["index"] = seg_stat.index_name_;
-    json["count"] = seg_stat.row_num_;
-    json["size"] = seg_stat.data_size_;
-
-    return Status::OK();
-}
-
-Status
-WebRequestHandler::ParsePartitionStat(const milvus::server::PartitionStat& par_stat, nlohmann::json& json) {
-    json["partition_tag"] = par_stat.tag_;
-    json["count"] = par_stat.total_row_num_;
-
-    std::vector<nlohmann::json> seg_stat_json;
-    for (auto& seg : par_stat.segments_stat_) {
-        nlohmann::json seg_json;
-        ParseSegmentStat(seg, seg_json);
-        seg_stat_json.push_back(seg_json);
-    }
-    json["segments_stat"] = seg_stat_json;
-
-    return Status::OK();
-}
-
-Status
-WebRequestHandler::IsBinaryTable(const std::string& collection_name, bool& bin) {
+WebRequestHandler::IsBinaryCollection(const std::string& collection_name, bool& bin) {
     CollectionSchema schema;
     auto status = request_handler_.DescribeCollection(context_ptr_, collection_name, schema);
     if (status.ok()) {
@@ -208,7 +131,7 @@ WebRequestHandler::CopyRecordsFromJson(const nlohmann::json& json, engine::Vecto
 
 ///////////////////////// WebRequestHandler methods ///////////////////////////////////////
 Status
-WebRequestHandler::GetTableMetaInfo(const std::string& collection_name, nlohmann::json& json_out) {
+WebRequestHandler::GetCollectionMetaInfo(const std::string& collection_name, nlohmann::json& json_out) {
     CollectionSchema schema;
     auto status = request_handler_.DescribeCollection(context_ptr_, collection_name, schema);
     if (!status.ok()) {
@@ -239,20 +162,17 @@ WebRequestHandler::GetTableMetaInfo(const std::string& collection_name, nlohmann
 }
 
 Status
-WebRequestHandler::GetTableStat(const std::string& collection_name, nlohmann::json& json_out) {
-    struct CollectionInfo collection_info;
+WebRequestHandler::GetCollectionStat(const std::string& collection_name, nlohmann::json& json_out) {
+    std::string collection_info;
     auto status = request_handler_.ShowCollectionInfo(context_ptr_, collection_name, collection_info);
 
     if (status.ok()) {
-        json_out["count"] = collection_info.total_row_num_;
-
-        std::vector<nlohmann::json> par_stat_json;
-        for (auto& par : collection_info.partitions_stat_) {
-            nlohmann::json par_json;
-            ParsePartitionStat(par, par_json);
-            par_stat_json.push_back(par_json);
+        try {
+            json_out = nlohmann::json::parse(collection_info);
+        } catch (std::exception& e) {
+            return Status(SERVER_UNEXPECTED_ERROR,
+                          "Error occurred when parsing collection stat information: " + std::string(e.what()));
         }
-        json_out["partitions_stat"] = par_stat_json;
     }
 
     return status;
@@ -330,7 +250,7 @@ WebRequestHandler::Cmd(const std::string& cmd, std::string& result_str) {
 }
 
 Status
-WebRequestHandler::PreLoadTable(const nlohmann::json& json, std::string& result_str) {
+WebRequestHandler::PreLoadCollection(const nlohmann::json& json, std::string& result_str) {
     if (!json.contains("collection_name")) {
         return Status(BODY_FIELD_LOSS, "Field \"load\" must contains collection_name");
     }
@@ -385,7 +305,8 @@ WebRequestHandler::Compact(const nlohmann::json& json, std::string& result_str) 
 
     auto name = collection_name.get<std::string>();
 
-    auto status = request_handler_.Compact(context_ptr_, name);
+    double compact_threshold = 0.1;  // compact trigger threshold: delete_counts/segment_counts
+    auto status = request_handler_.Compact(context_ptr_, name, compact_threshold);
 
     if (status.ok()) {
         nlohmann::json result;
@@ -490,6 +411,10 @@ WebRequestHandler::Search(const std::string& collection_name, const nlohmann::js
     }
     int64_t topk = json["topk"];
 
+    if (!json.contains("params")) {
+        return Status(BODY_FIELD_LOSS, "Field \'params\' is required");
+    }
+
     std::vector<std::string> partition_tags;
     if (json.contains("partition_tags")) {
         auto tags = json["partition_tags"];
@@ -502,41 +427,52 @@ WebRequestHandler::Search(const std::string& collection_name, const nlohmann::js
         }
     }
 
-    std::vector<std::string> file_id_vec;
-    if (json.contains("file_ids")) {
-        auto ids = json["file_ids"];
-        if (!ids.is_null() && !ids.is_array()) {
-            return Status(BODY_PARSE_FAIL, "Field \"file_ids\" must be a array");
-        }
-        for (auto& id : ids) {
-            file_id_vec.emplace_back(id.get<std::string>());
-        }
-    }
-
-    if (!json.contains("params")) {
-        return Status(BODY_FIELD_LOSS, "Field \'params\' is required");
-    }
-
-    bool bin_flag = false;
-    auto status = IsBinaryTable(collection_name, bin_flag);
-    if (!status.ok()) {
-        return status;
-    }
-
-    if (!json.contains("vectors")) {
-        return Status(BODY_FIELD_LOSS, "Field \"vectors\" is required");
-    }
-
-    engine::VectorsData vectors_data;
-    status = CopyRecordsFromJson(json["vectors"], vectors_data, bin_flag);
-    if (!status.ok()) {
-        return status;
-    }
-
     TopKQueryResult result;
-    status = request_handler_.Search(context_ptr_, collection_name, vectors_data, topk, json["params"], partition_tags,
-                                     file_id_vec, result);
+    Status status;
+    if (json.contains("ids")) {
+        auto vec_ids = json["ids"];
+        if (!vec_ids.is_array()) {
+            return Status(BODY_PARSE_FAIL, "Field \"ids\" must be ad array");
+        }
 
+        std::vector<int64_t> id_array;
+        for (auto& id_str : vec_ids) {
+            id_array.emplace_back(std::stol(id_str.get<std::string>()));
+        }
+        //        std::vector<int64_t> id_array(vec_ids.begin(), vec_ids.end());
+        status = request_handler_.SearchByID(context_ptr_, collection_name, id_array, topk, json["params"],
+                                             partition_tags, result);
+    } else {
+        std::vector<std::string> file_id_vec;
+        if (json.contains("file_ids")) {
+            auto ids = json["file_ids"];
+            if (!ids.is_null() && !ids.is_array()) {
+                return Status(BODY_PARSE_FAIL, "Field \"file_ids\" must be a array");
+            }
+            for (auto& id : ids) {
+                file_id_vec.emplace_back(id.get<std::string>());
+            }
+        }
+
+        bool bin_flag = false;
+        status = IsBinaryCollection(collection_name, bin_flag);
+        if (!status.ok()) {
+            return status;
+        }
+
+        if (!json.contains("vectors")) {
+            return Status(BODY_FIELD_LOSS, "Field \"vectors\" is required");
+        }
+
+        engine::VectorsData vectors_data;
+        status = CopyRecordsFromJson(json["vectors"], vectors_data, bin_flag);
+        if (!status.ok()) {
+            return status;
+        }
+
+        status = request_handler_.Search(context_ptr_, collection_name, vectors_data, topk, json["params"],
+                                         partition_tags, file_id_vec, result);
+    }
     if (!status.ok()) {
         return status;
     }
@@ -563,6 +499,251 @@ WebRequestHandler::Search(const std::string& collection_name, const nlohmann::js
     }
     result_json["result"] = search_result_json;
     result_str = result_json.dump();
+
+    return Status::OK();
+}
+
+Status
+WebRequestHandler::ProcessLeafQueryJson(const nlohmann::json& json, milvus::query::BooleanQueryPtr& query) {
+    if (json.contains("term")) {
+        auto leaf_query = std::make_shared<query::LeafQuery>();
+        auto term_json = json["term"];
+        std::string field_name = term_json["field_name"];
+        auto term_value_json = term_json["values"];
+        if (!term_value_json.is_array()) {
+            std::string msg = "Term json string is not an array";
+            return Status{BODY_PARSE_FAIL, msg};
+        }
+
+        auto term_size = term_value_json.size();
+        auto term_query = std::make_shared<query::TermQuery>();
+        term_query->field_name = field_name;
+        term_query->field_value.resize(term_size * sizeof(int64_t));
+
+        switch (field_type_.at(field_name)) {
+            case engine::meta::hybrid::DataType::INT8:
+            case engine::meta::hybrid::DataType::INT16:
+            case engine::meta::hybrid::DataType::INT32:
+            case engine::meta::hybrid::DataType::INT64: {
+                std::vector<int64_t> term_value(term_size, 0);
+                for (uint64_t i = 0; i < term_size; ++i) {
+                    term_value[i] = term_value_json[i].get<int64_t>();
+                }
+                memcpy(term_query->field_value.data(), term_value.data(), term_size * sizeof(int64_t));
+                break;
+            }
+            case engine::meta::hybrid::DataType::FLOAT:
+            case engine::meta::hybrid::DataType::DOUBLE: {
+                std::vector<double> term_value(term_size, 0);
+                for (uint64_t i = 0; i < term_size; ++i) {
+                    term_value[i] = term_value_json[i].get<double>();
+                }
+                memcpy(term_query->field_value.data(), term_value.data(), term_size * sizeof(double));
+                break;
+            }
+        }
+
+        leaf_query->term_query = term_query;
+        query->AddLeafQuery(leaf_query);
+    } else if (json.contains("range")) {
+        auto leaf_query = std::make_shared<query::LeafQuery>();
+        auto range_query = std::make_shared<query::RangeQuery>();
+
+        auto range_json = json["range"];
+        std::string field_name = range_json["field_name"];
+        range_query->field_name = field_name;
+
+        auto range_value_json = range_json["values"];
+        if (range_value_json.contains("lt")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::LT;
+            compare_expr.operand = range_value_json["lt"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+        if (range_value_json.contains("lte")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::LTE;
+            compare_expr.operand = range_value_json["lte"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+        if (range_value_json.contains("eq")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::EQ;
+            compare_expr.operand = range_value_json["eq"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+        if (range_value_json.contains("ne")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::NE;
+            compare_expr.operand = range_value_json["ne"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+        if (range_value_json.contains("gt")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::GT;
+            compare_expr.operand = range_value_json["gt"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+        if (range_value_json.contains("gte")) {
+            query::CompareExpr compare_expr;
+            compare_expr.compare_operator = query::CompareOperator::GTE;
+            compare_expr.operand = range_value_json["gte"].get<std::string>();
+            range_query->compare_expr.emplace_back(compare_expr);
+        }
+
+        leaf_query->range_query = range_query;
+        query->AddLeafQuery(leaf_query);
+    } else if (json.contains("vector")) {
+        auto leaf_query = std::make_shared<query::LeafQuery>();
+        auto vector_query = std::make_shared<query::VectorQuery>();
+
+        auto vector_json = json["vector"];
+        std::string field_name = vector_json["field_name"];
+        vector_query->field_name = field_name;
+
+        engine::VectorsData vectors;
+        // TODO(yukun): process binary vector
+        CopyRecordsFromJson(vector_json["values"], vectors, false);
+
+        vector_query->query_vector.float_data = vectors.float_data_;
+        vector_query->query_vector.binary_data = vectors.binary_data_;
+
+        vector_query->topk = vector_json["topk"].get<int64_t>();
+        vector_query->extra_params = vector_json["extra_params"];
+
+        leaf_query->vector_query = vector_query;
+        query->AddLeafQuery(leaf_query);
+    }
+    return Status::OK();
+}
+
+Status
+WebRequestHandler::ProcessBoolQueryJson(const nlohmann::json& query_json, query::BooleanQueryPtr& boolean_query) {
+    if (query_json.contains("must")) {
+        boolean_query->SetOccur(query::Occur::MUST);
+        auto must_json = query_json["must"];
+        if (!must_json.is_array()) {
+            std::string msg = "Must json string is not an array";
+            return Status{BODY_PARSE_FAIL, msg};
+        }
+
+        for (auto& json : must_json) {
+            auto must_query = std::make_shared<query::BooleanQuery>();
+            if (json.contains("must") || json.contains("should") || json.contains("must_not")) {
+                ProcessBoolQueryJson(json, must_query);
+                boolean_query->AddBooleanQuery(must_query);
+            } else {
+                ProcessLeafQueryJson(json, boolean_query);
+            }
+        }
+        return Status::OK();
+    } else if (query_json.contains("should")) {
+        boolean_query->SetOccur(query::Occur::SHOULD);
+        auto should_json = query_json["should"];
+        if (!should_json.is_array()) {
+            std::string msg = "Should json string is not an array";
+            return Status{BODY_PARSE_FAIL, msg};
+        }
+
+        for (auto& json : should_json) {
+            if (json.contains("must") || json.contains("should") || json.contains("must_not")) {
+                auto should_query = std::make_shared<query::BooleanQuery>();
+                ProcessBoolQueryJson(json, should_query);
+                boolean_query->AddBooleanQuery(should_query);
+            } else {
+                ProcessLeafQueryJson(json, boolean_query);
+            }
+        }
+        return Status::OK();
+    } else if (query_json.contains("must_not")) {
+        boolean_query->SetOccur(query::Occur::MUST_NOT);
+        auto should_json = query_json["must_not"];
+        if (!should_json.is_array()) {
+            std::string msg = "Must_not json string is not an array";
+            return Status{BODY_PARSE_FAIL, msg};
+        }
+
+        for (auto& json : should_json) {
+            if (json.contains("must") || json.contains("should") || json.contains("must_not")) {
+                auto must_not_query = std::make_shared<query::BooleanQuery>();
+                ProcessBoolQueryJson(json, must_not_query);
+                boolean_query->AddBooleanQuery(must_not_query);
+            } else {
+                ProcessLeafQueryJson(json, boolean_query);
+            }
+        }
+        return Status::OK();
+    } else {
+        std::string msg = "Must json string doesnot include right query";
+        return Status{BODY_PARSE_FAIL, msg};
+    }
+}
+
+Status
+WebRequestHandler::HybridSearch(const std::string& collection_name, const nlohmann::json& json,
+                                std::string& result_str) {
+    Status status;
+
+    status = request_handler_.DescribeHybridCollection(context_ptr_, collection_name, field_type_);
+    if (!status.ok()) {
+        return Status{UNEXPECTED_ERROR, "DescribeHybridCollection failed"};
+    }
+
+    std::vector<std::string> partition_tags;
+    if (json.contains("partition_tags")) {
+        auto tags = json["partition_tags"];
+        if (!tags.is_null() && !tags.is_array()) {
+            return Status(BODY_PARSE_FAIL, "Field \"partition_tags\" must be a array");
+        }
+
+        for (auto& tag : tags) {
+            partition_tags.emplace_back(tag.get<std::string>());
+        }
+    }
+
+    if (json.contains("bool")) {
+        auto boolean_query_json = json["bool"];
+        query::BooleanQueryPtr boolean_query = std::make_shared<query::BooleanQuery>();
+
+        status = ProcessBoolQueryJson(boolean_query_json, boolean_query);
+        if (!status.ok()) {
+            return status;
+        }
+        query::GeneralQueryPtr general_query = std::make_shared<query::GeneralQuery>();
+        query::GenBinaryQuery(boolean_query, general_query->bin);
+
+        context::HybridSearchContextPtr hybrid_search_context = std::make_shared<context::HybridSearchContext>();
+        TopKQueryResult result;
+        status = request_handler_.HybridSearch(context_ptr_, hybrid_search_context, collection_name, partition_tags,
+                                               general_query, result);
+
+        if (!status.ok()) {
+            return status;
+        }
+
+        nlohmann::json result_json;
+        result_json["num"] = result.row_num_;
+        if (result.row_num_ == 0) {
+            result_json["result"] = std::vector<int64_t>();
+            result_str = result_json.dump();
+            return Status::OK();
+        }
+
+        auto step = result.id_list_.size() / result.row_num_;
+        nlohmann::json search_result_json;
+        for (size_t i = 0; i < result.row_num_; i++) {
+            nlohmann::json raw_result_json;
+            for (size_t j = 0; j < step; j++) {
+                nlohmann::json one_result_json;
+                one_result_json["id"] = std::to_string(result.id_list_.at(i * step + j));
+                one_result_json["distance"] = std::to_string(result.distance_list_.at(i * step + j));
+                raw_result_json.emplace_back(one_result_json);
+            }
+            search_result_json.emplace_back(raw_result_json);
+        }
+        result_json["result"] = search_result_json;
+        result_str = result_json.dump();
+    }
 
     return Status::OK();
 }
@@ -600,18 +781,13 @@ Status
 WebRequestHandler::GetVectorsByIDs(const std::string& collection_name, const std::vector<int64_t>& ids,
                                    nlohmann::json& json_out) {
     std::vector<engine::VectorsData> vector_batch;
-    for (size_t i = 0; i < ids.size(); i++) {
-        auto vec_ids = std::vector<int64_t>(ids.begin() + i, ids.begin() + i + 1);
-        engine::VectorsData vectors_data;
-        auto status = request_handler_.GetVectorByID(context_ptr_, collection_name, vec_ids, vectors_data);
-        if (!status.ok()) {
-            return status;
-        }
-        vector_batch.push_back(vectors_data);
+    auto status = request_handler_.GetVectorsByID(context_ptr_, collection_name, ids, vector_batch);
+    if (!status.ok()) {
+        return status;
     }
 
     bool bin;
-    auto status = IsBinaryTable(collection_name, bin);
+    status = IsBinaryCollection(collection_name, bin);
     if (!status.ok()) {
         return status;
     }
@@ -901,7 +1077,7 @@ WebRequestHandler::SetGpuConfig(const GPUConfigDto::ObjectWrapper& gpu_config_dt
  * Collection {
  */
 StatusDto::ObjectWrapper
-WebRequestHandler::CreateTable(const TableRequestDto::ObjectWrapper& collection_schema) {
+WebRequestHandler::CreateCollection(const CollectionRequestDto::ObjectWrapper& collection_schema) {
     if (nullptr == collection_schema->collection_name.get()) {
         RETURN_STATUS_DTO(BODY_FIELD_LOSS, "Field \'collection_name\' is missing")
     }
@@ -931,7 +1107,51 @@ WebRequestHandler::CreateTable(const TableRequestDto::ObjectWrapper& collection_
 }
 
 StatusDto::ObjectWrapper
-WebRequestHandler::ShowTables(const OQueryParams& query_params, OString& result) {
+WebRequestHandler::CreateHybridCollection(const milvus::server::web::OString& body) {
+    auto json_str = nlohmann::json::parse(body->c_str());
+    std::string collection_name = json_str["collection_name"];
+
+    // TODO(yukun): do checking
+    std::vector<std::pair<std::string, engine::meta::hybrid::DataType>> field_types;
+    std::vector<std::pair<std::string, std::string>> field_extra_params;
+    std::vector<std::pair<std::string, uint64_t>> vector_dimensions;
+    for (auto& field : json_str["fields"]) {
+        std::string field_name = field["field_name"];
+        std::string field_type = field["field_type"];
+        auto extra_params = field["extra_params"];
+        if (field_type == "int8") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::INT8));
+        } else if (field_type == "int16") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::INT16));
+        } else if (field_type == "int32") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::INT32));
+        } else if (field_type == "int64") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::INT64));
+        } else if (field_type == "float") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::FLOAT));
+        } else if (field_type == "double") {
+            field_types.emplace_back(std::make_pair(field_name, engine::meta::hybrid::DataType::DOUBLE));
+        } else if (field_type == "vector") {
+        } else {
+            std::string msg = field_name + " has wrong field_type";
+            RETURN_STATUS_DTO(BODY_PARSE_FAIL, msg.c_str());
+        }
+
+        field_extra_params.emplace_back(std::make_pair(field_name, extra_params.dump()));
+
+        if (extra_params.contains("dimension")) {
+            vector_dimensions.emplace_back(std::make_pair(field_name, extra_params["dimension"].get<uint64_t>()));
+        }
+    }
+
+    auto status = request_handler_.CreateHybridCollection(context_ptr_, collection_name, field_types, vector_dimensions,
+                                                          field_extra_params);
+
+    ASSIGN_RETURN_STATUS_DTO(status)
+}
+
+StatusDto::ObjectWrapper
+WebRequestHandler::ShowCollections(const OQueryParams& query_params, OString& result) {
     int64_t offset = 0;
     auto status = ParseQueryInteger(query_params, "offset", offset);
     if (!status.ok()) {
@@ -971,7 +1191,7 @@ WebRequestHandler::ShowTables(const OQueryParams& query_params, OString& result)
     nlohmann::json collections_json;
     for (int64_t i = offset; i < page_size + offset; i++) {
         nlohmann::json collection_json;
-        status = GetTableMetaInfo(collections.at(i), collection_json);
+        status = GetCollectionMetaInfo(collections.at(i), collection_json);
         if (!status.ok()) {
             ASSIGN_RETURN_STATUS_DTO(status)
         }
@@ -992,7 +1212,7 @@ WebRequestHandler::ShowTables(const OQueryParams& query_params, OString& result)
 }
 
 StatusDto::ObjectWrapper
-WebRequestHandler::GetTable(const OString& collection_name, const OQueryParams& query_params, OString& result) {
+WebRequestHandler::GetCollection(const OString& collection_name, const OQueryParams& query_params, OString& result) {
     if (nullptr == collection_name.get()) {
         RETURN_STATUS_DTO(PATH_PARAM_LOSS, "Path param \'collection_name\' is required!");
     }
@@ -1005,11 +1225,11 @@ WebRequestHandler::GetTable(const OString& collection_name, const OQueryParams& 
 
     if (!stat.empty() && stat == "stat") {
         nlohmann::json json;
-        status = GetTableStat(collection_name->std_str(), json);
+        status = GetCollectionStat(collection_name->std_str(), json);
         result = status.ok() ? json.dump().c_str() : "NULL";
     } else {
         nlohmann::json json;
-        status = GetTableMetaInfo(collection_name->std_str(), json);
+        status = GetCollectionMetaInfo(collection_name->std_str(), json);
         result = status.ok() ? json.dump().c_str() : "NULL";
     }
 
@@ -1017,7 +1237,7 @@ WebRequestHandler::GetTable(const OString& collection_name, const OQueryParams& 
 }
 
 StatusDto::ObjectWrapper
-WebRequestHandler::DropTable(const OString& collection_name) {
+WebRequestHandler::DropCollection(const OString& collection_name) {
     auto status = request_handler_.DropCollection(context_ptr_, collection_name->std_str());
 
     ASSIGN_RETURN_STATUS_DTO(status)
@@ -1092,7 +1312,7 @@ WebRequestHandler::CreatePartition(const OString& collection_name, const Partiti
 }
 
 StatusDto::ObjectWrapper
-WebRequestHandler::ShowPartitions(const OString& collection_name, const OQueryParams& query_params,
+WebRequestHandler::ShowPartitions(const OString& collection_name, const OQueryParams& query_params, const OString& body,
                                   PartitionListDto::ObjectWrapper& partition_list_dto) {
     int64_t offset = 0;
     auto status = ParseQueryInteger(query_params, "offset", offset);
@@ -1109,6 +1329,35 @@ WebRequestHandler::ShowPartitions(const OString& collection_name, const OQueryPa
     if (offset < 0 || page_size < 0) {
         ASSIGN_RETURN_STATUS_DTO(
             Status(SERVER_UNEXPECTED_ERROR, "Query param 'offset' or 'page_size' should equal or bigger than 0"));
+    }
+
+    if (nullptr != body.get() && body->getSize() > 0) {
+        auto body_json = nlohmann::json::parse(body->c_str());
+        if (!body_json.contains("filter")) {
+            RETURN_STATUS_DTO(BODY_FIELD_LOSS, "Field \'filter\' is required.")
+        }
+        auto filter_json = body_json["filter"];
+        if (filter_json.contains("partition_tag")) {
+            std::string tag = filter_json["partition_tag"];
+            bool exists = false;
+            status = request_handler_.HasPartition(context_ptr_, collection_name->std_str(), tag, exists);
+            if (!status.ok()) {
+                ASSIGN_RETURN_STATUS_DTO(status)
+            }
+            auto partition_dto = PartitionFieldsDto::createShared();
+            if (exists) {
+                partition_list_dto->count = 1;
+                partition_dto->partition_tag = tag.c_str();
+            } else {
+                partition_list_dto->count = 0;
+            }
+            partition_list_dto->partitions = partition_list_dto->partitions->createShared();
+            partition_list_dto->partitions->pushBack(partition_dto);
+
+            ASSIGN_RETURN_STATUS_DTO(status)
+        } else {
+            RETURN_STATUS_DTO(BODY_FIELD_LOSS, "Unknown field.")
+        }
     }
 
     bool all_required = false;
@@ -1202,52 +1451,42 @@ WebRequestHandler::ShowSegments(const OString& collection_name, const OQueryPara
         tag = query_params.get("partition_tag")->std_str();
     }
 
-    CollectionInfo info;
+    std::string info;
     status = request_handler_.ShowCollectionInfo(context_ptr_, collection_name->std_str(), info);
     if (!status.ok()) {
         ASSIGN_RETURN_STATUS_DTO(status)
     }
 
-    typedef std::pair<std::string, SegmentStat> Pair;
-    std::vector<Pair> segments;
-    for (auto& par_stat : info.partitions_stat_) {
-        if (!(all_required || tag.empty() || tag == par_stat.tag_)) {
+    nlohmann::json info_json = nlohmann::json::parse(info);
+    nlohmann::json segments_json = nlohmann::json::array();
+    for (auto& par : info_json["partitions"]) {
+        if (!(all_required || tag.empty() || tag == par["tag"])) {
             continue;
         }
-        for (auto& seg_stat : par_stat.segments_stat_) {
-            auto segment_stat = std::pair<std::string, SegmentStat>(par_stat.tag_, seg_stat);
-            segments.push_back(segment_stat);
+
+        auto segments = par["segments"];
+        if (!segments.is_null()) {
+            for (auto& seg : segments) {
+                seg["partition_tag"] = par["tag"];
+                segments_json.push_back(seg);
+            }
         }
     }
-
-    auto compare = [](Pair& a, Pair& b) -> bool { return a.second.name_ >= b.second.name_; };
-    std::sort(segments.begin(), segments.end(), compare);
-
-    int64_t size = segments.size();
-    int64_t iter_begin = 0;
-    int64_t iter_end = size;
-    if (!all_required) {
-        iter_begin = std::min(size, offset);
-        iter_end = std::min(size, offset + page_size);
-    }
-
     nlohmann::json result_json;
-    if (segments.empty()) {
-        result_json["segments"] = std::vector<int64_t>();
+    if (!all_required) {
+        int64_t size = segments_json.size();
+        int iter_begin = std::min(size, offset);
+        int iter_end = std::min(size, offset + page_size);
+
+        nlohmann::json segments_slice_json = nlohmann::json::array();
+        segments_slice_json.insert(segments_slice_json.begin(), segments_json.begin() + iter_begin,
+                                   segments_json.begin() + iter_end);
+        result_json["segments"] = segments_slice_json;  // segments_json;
     } else {
-        nlohmann::json segs_json;
-        for (auto iter = iter_begin; iter < iter_end; iter++) {
-            nlohmann::json seg_json;
-            ParseSegmentStat(segments.at(iter).second, seg_json);
-            seg_json["partition_tag"] = segments.at(iter).first;
-            segs_json.push_back(seg_json);
-        }
-        result_json["segments"] = segs_json;
+        result_json["segments"] = segments_json;
     }
-
-    result_json["count"] = size;
+    result_json["count"] = segments_json.size();
     AddStatusToJson(result_json, status.code(), status.message());
-
     response = result_json.dump().c_str();
 
     ASSIGN_RETURN_STATUS_DTO(status)
@@ -1301,7 +1540,7 @@ WebRequestHandler::Insert(const OString& collection_name, const OString& body, V
 
     // step 1: copy vectors
     bool bin_flag;
-    auto status = IsBinaryTable(collection_name->std_str(), bin_flag);
+    auto status = IsBinaryCollection(collection_name->std_str(), bin_flag);
     if (!status.ok()) {
         ASSIGN_RETURN_STATUS_DTO(status)
     }
@@ -1324,8 +1563,14 @@ WebRequestHandler::Insert(const OString& collection_name, const OString& body, V
         }
         auto& id_array = vectors.id_array_;
         id_array.clear();
-        for (auto& id : ids_json) {
-            id_array.emplace_back(id.get<int64_t>());
+        try {
+            for (auto& id_str : ids_json) {
+                int64_t id = std::stol(id_str.get<std::string>());
+                id_array.emplace_back(id);
+            }
+        } catch (std::exception& e) {
+            std::string err_msg = std::string("Cannot convert vectors id. details: ") + e.what();
+            RETURN_STATUS_DTO(SERVER_UNEXPECTED_ERROR, err_msg.c_str());
         }
     }
 
@@ -1348,33 +1593,142 @@ WebRequestHandler::Insert(const OString& collection_name, const OString& body, V
 }
 
 StatusDto::ObjectWrapper
-WebRequestHandler::GetVector(const OString& collection_name, const OQueryParams& query_params, OString& response) {
-    int64_t id = 0;
-    auto status = ParseQueryInteger(query_params, "id", id, false);
-    if (!status.ok()) {
-        RETURN_STATUS_DTO(status.code(), status.message().c_str());
+WebRequestHandler::InsertEntity(const OString& collection_name, const milvus::server::web::OString& body,
+                                VectorIdsDto::ObjectWrapper& ids_dto) {
+    if (nullptr == body.get() || body->getSize() == 0) {
+        RETURN_STATUS_DTO(BODY_FIELD_LOSS, "Request payload is required.")
     }
 
-    std::vector<int64_t> ids = {id};
-    engine::VectorsData vectors;
-    nlohmann::json vectors_json;
-    status = GetVectorsByIDs(collection_name->std_str(), ids, vectors_json);
-    if (!status.ok()) {
-        response = "NULL";
-        ASSIGN_RETURN_STATUS_DTO(status)
+    auto body_json = nlohmann::json::parse(body->c_str());
+    std::string partition_tag = body_json["partition_tag"];
+
+    uint64_t row_num = body_json["row_num"];
+
+    std::unordered_map<std::string, engine::meta::hybrid::DataType> field_types;
+    auto status = request_handler_.DescribeHybridCollection(context_ptr_, collection_name->c_str(), field_types);
+
+    auto entities = body_json["entity"];
+    if (!entities.is_array()) {
+        RETURN_STATUS_DTO(ILLEGAL_BODY, "An entity must be an array");
     }
 
-    nlohmann::json json;
-    AddStatusToJson(json, status.code(), status.message());
-    if (vectors_json.empty()) {
-        json["vectors"] = std::vector<int64_t>();
-    } else {
-        json["vectors"] = vectors_json;
+    std::vector<std::string> field_names;
+    std::vector<std::vector<uint8_t>> attr_values;
+    size_t attr_size = 0;
+    std::unordered_map<std::string, engine::VectorsData> vector_datas;
+    for (auto& entity : entities) {
+        std::string field_name = entity["field_name"];
+        field_names.emplace_back(field_name);
+        auto field_value = entity["field_value"];
+        std::vector<uint8_t> attr_value;
+        switch (field_types.at(field_name)) {
+            case engine::meta::hybrid::DataType::INT8:
+            case engine::meta::hybrid::DataType::INT16:
+            case engine::meta::hybrid::DataType::INT32:
+            case engine::meta::hybrid::DataType::INT64: {
+                std::vector<int64_t> value;
+                auto size = field_value.size();
+                value.resize(size);
+                attr_value.resize(size * sizeof(int64_t));
+                size_t offset = 0;
+                for (auto data : field_value) {
+                    value[offset] = data.get<int64_t>();
+                    ++offset;
+                }
+                memcpy(attr_value.data(), value.data(), size * sizeof(int64_t));
+                attr_size += size * sizeof(int64_t);
+                attr_values.emplace_back(attr_value);
+                break;
+            }
+            case engine::meta::hybrid::DataType::FLOAT:
+            case engine::meta::hybrid::DataType::DOUBLE: {
+                std::vector<double> value;
+                auto size = field_value.size();
+                value.resize(size);
+                attr_value.resize(size * sizeof(double));
+                size_t offset = 0;
+                for (auto data : field_value) {
+                    value[offset] = data.get<double>();
+                    ++offset;
+                }
+                memcpy(attr_value.data(), value.data(), size * sizeof(double));
+                attr_size += size * sizeof(double);
+
+                attr_values.emplace_back(attr_value);
+                break;
+            }
+            case engine::meta::hybrid::DataType::VECTOR: {
+                bool bin_flag;
+                status = IsBinaryCollection(collection_name->c_str(), bin_flag);
+                if (!status.ok()) {
+                    ASSIGN_RETURN_STATUS_DTO(status)
+                }
+
+                engine::VectorsData vectors;
+                CopyRecordsFromJson(field_value, vectors, bin_flag);
+                vector_datas.insert(std::make_pair(field_name, vectors));
+            }
+            default: {}
+        }
     }
 
-    response = json.dump().c_str();
+    std::vector<uint8_t> attrs(attr_size, 0);
+    size_t attr_offset = 0;
+    for (auto& data : attr_values) {
+        memcpy(attrs.data() + attr_offset, data.data(), data.size());
+        attr_offset += data.size();
+    }
+
+    status = request_handler_.InsertEntity(context_ptr_, collection_name->c_str(), partition_tag, row_num, field_names,
+                                           attrs, vector_datas);
+
+    if (status.ok()) {
+        ids_dto->ids = ids_dto->ids->createShared();
+        for (auto& id : vector_datas.begin()->second.id_array_) {
+            ids_dto->ids->pushBack(std::to_string(id).c_str());
+        }
+    }
 
     ASSIGN_RETURN_STATUS_DTO(status)
+}
+
+StatusDto::ObjectWrapper
+WebRequestHandler::GetVector(const OString& collection_name, const OQueryParams& query_params, OString& response) {
+    auto status = Status::OK();
+    try {
+        auto query_ids = query_params.get("ids");
+        if (query_ids == nullptr || query_ids.get() == nullptr) {
+            RETURN_STATUS_DTO(QUERY_PARAM_LOSS, "Query param ids is required.");
+        }
+
+        std::vector<std::string> ids;
+        StringHelpFunctions::SplitStringByDelimeter(query_ids->c_str(), ",", ids);
+
+        std::vector<int64_t> vector_ids;
+        for (auto& id : ids) {
+            vector_ids.push_back(std::stol(id));
+        }
+        engine::VectorsData vectors;
+        nlohmann::json vectors_json;
+        status = GetVectorsByIDs(collection_name->std_str(), vector_ids, vectors_json);
+        if (!status.ok()) {
+            response = "NULL";
+            ASSIGN_RETURN_STATUS_DTO(status)
+        }
+
+        nlohmann::json json;
+        AddStatusToJson(json, status.code(), status.message());
+        if (vectors_json.empty()) {
+            json["vectors"] = std::vector<int64_t>();
+        } else {
+            json["vectors"] = vectors_json;
+        }
+        response = json.dump().c_str();
+    } catch (std::exception& e) {
+        RETURN_STATUS_DTO(SERVER_UNEXPECTED_ERROR, e.what());
+    }
+
+    ASSIGN_RETURN_STATUS_DTO(status);
 }
 
 StatusDto::ObjectWrapper
@@ -1389,6 +1743,8 @@ WebRequestHandler::VectorsOp(const OString& collection_name, const OString& payl
             status = DeleteByIDs(collection_name->std_str(), payload_json["delete"], result_str);
         } else if (payload_json.contains("search")) {
             status = Search(collection_name->std_str(), payload_json["search"], result_str);
+        } else if (payload_json.contains("query")) {
+            status = HybridSearch(collection_name->c_str(), payload_json["query"], result_str);
         } else {
             status = Status(ILLEGAL_BODY, "Unknown body");
         }
@@ -1452,7 +1808,7 @@ WebRequestHandler::SystemOp(const OString& op, const OString& body_str, OString&
         nlohmann::json j = nlohmann::json::parse(body_str->c_str());
         if (op->equals("task")) {
             if (j.contains("load")) {
-                status = PreLoadTable(j["load"], result_str);
+                status = PreLoadCollection(j["load"], result_str);
             } else if (j.contains("flush")) {
                 status = Flush(j["flush"], result_str);
             }

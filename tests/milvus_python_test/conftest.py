@@ -8,6 +8,7 @@ from milvus import Milvus, IndexType, MetricType
 from utils import *
 
 index_file_size = 10
+timeout = 1 
 
 
 def pytest_addoption(parser):
@@ -37,26 +38,19 @@ def connect(request):
     port = request.config.getoption("--port")
     http_port = request.config.getoption("--http-port")
     handler = request.config.getoption("--handler")
-    milvus = get_milvus(handler=handler)
+    if handler == "HTTP":
+        port = http_port
     try:
-        if handler == "HTTP":
-            port = http_port
-        status = milvus.connect(host=ip, port=port)
-        logging.getLogger().info(status)
-        if not status.OK():
-            # try again
-            logging.getLogger().info("------------------------------------")
-            logging.getLogger().info("Try to connect again")
-            logging.getLogger().info("------------------------------------")
-            res = milvus.connect(host=ip, port=port)
+        milvus = get_milvus(host=ip, port=port, handler=handler)
     except Exception as e:
         logging.getLogger().error(str(e))
         pytest.exit("Milvus server can not connected, exit pytest ...")
     def fin():
         try:
-            milvus.disconnect()
-        except:
+            # milvus.disconnect()
             pass
+        except Exception as e:
+            logging.getLogger().info(str(e))
     request.addfinalizer(fin)
     return milvus
 
@@ -67,7 +61,10 @@ def dis_connect(request):
     port = request.config.getoption("--port")
     http_port = request.config.getoption("--http-port")
     handler = request.config.getoption("--handler")
-    milvus = get_milvus(handler=handler)
+    if handler == "HTTP":
+        port = http_port
+    milvus = get_milvus(host=ip, port=port, handler=handler)
+    milvus.close()
     return milvus
 
 
@@ -85,8 +82,13 @@ def args(request):
 
 @pytest.fixture(scope="module")
 def milvus(request):
+    ip = request.config.getoption("--ip")
+    port = request.config.getoption("--port")
+    http_port = request.config.getoption("--http-port")
     handler = request.config.getoption("--handler")
-    return get_milvus(handler=handler)
+    if handler == "HTTP":
+        port = http_port
+    return get_milvus(host=ip, port=port, handler=handler)
 
 
 @pytest.fixture(scope="function")
@@ -98,15 +100,18 @@ def collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.L2}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
 
@@ -122,15 +127,18 @@ def ip_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.IP}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
 
@@ -146,15 +154,18 @@ def jac_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.JACCARD}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
 
@@ -169,15 +180,18 @@ def ham_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.HAMMING}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
 
@@ -192,15 +206,18 @@ def tanimoto_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.TANIMOTO}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
     return collection_name
@@ -214,15 +231,18 @@ def substructure_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.SUBSTRUCTURE}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
     return collection_name
@@ -236,15 +256,18 @@ def superstructure_collection(request, connect):
              'dimension': dim,
              'index_file_size': index_file_size,
              'metric_type': MetricType.SUPERSTRUCTURE}
-    status = connect.create_collection(param)
-    # logging.getLogger().info(status)
+    result = connect.create_collection(param, timeout=timeout)
+    status = result
+    if isinstance(result, tuple):
+        status = result[0]
     if not status.OK():
         pytest.exit("collection can not be created, exit pytest ...")
 
     def teardown():
-        status, collection_names = connect.show_collections()
-        for collection_name in collection_names:
-            connect.drop_collection(collection_name)
+        # status, collection_names = connect.list_collections()
+        # for collection_name in collection_names:
+        #     connect.drop_collection(collection_name)
+        connect.drop_collection(collection_name)
 
     request.addfinalizer(teardown)
     return collection_name

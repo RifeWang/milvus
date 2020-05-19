@@ -13,6 +13,7 @@
 
 #include <fiu-local.h>
 
+#include <unistd.h>
 #include <boost/filesystem.hpp>
 #include <chrono>
 #include <mutex>
@@ -23,6 +24,8 @@
 //#include "storage/s3/S3ClientWrapper.h"
 #include "utils/CommonUtil.h"
 #include "utils/Log.h"
+
+#include <map>
 
 namespace milvus {
 namespace engine {
@@ -84,7 +87,7 @@ CreateCollectionPath(const DBMetaOptions& options, const std::string& collection
     std::string table_path = db_path + TABLES_FOLDER + collection_id;
     auto status = server::CommonUtil::CreateDirectory(table_path);
     if (!status.ok()) {
-        ENGINE_LOG_ERROR << status.message();
+        LOG_ENGINE_ERROR_ << status.message();
         return status;
     }
 
@@ -93,7 +96,7 @@ CreateCollectionPath(const DBMetaOptions& options, const std::string& collection
         status = server::CommonUtil::CreateDirectory(table_path);
         fiu_do_on("CreateCollectionPath.creat_slave_path", status = Status(DB_INVALID_PATH, ""));
         if (!status.ok()) {
-            ENGINE_LOG_ERROR << status.message();
+            LOG_ENGINE_ERROR_ << status.message();
             return status;
         }
     }
@@ -110,10 +113,10 @@ DeleteCollectionPath(const DBMetaOptions& options, const std::string& collection
         std::string table_path = path + TABLES_FOLDER + collection_id;
         if (force) {
             boost::filesystem::remove_all(table_path);
-            ENGINE_LOG_DEBUG << "Remove collection folder: " << table_path;
+            LOG_ENGINE_DEBUG_ << "Remove collection folder: " << table_path;
         } else if (boost::filesystem::exists(table_path) && boost::filesystem::is_empty(table_path)) {
             boost::filesystem::remove_all(table_path);
-            ENGINE_LOG_DEBUG << "Remove collection folder: " << table_path;
+            LOG_ENGINE_DEBUG_ << "Remove collection folder: " << table_path;
         }
     }
 
@@ -141,7 +144,7 @@ CreateCollectionFilePath(const DBMetaOptions& options, meta::SegmentSchema& tabl
     auto status = server::CommonUtil::CreateDirectory(parent_path);
     fiu_do_on("CreateCollectionFilePath.fail_create", status = Status(DB_INVALID_PATH, ""));
     if (!status.ok()) {
-        ENGINE_LOG_ERROR << status.message();
+        LOG_ENGINE_ERROR_ << status.message();
         return status;
     }
 
@@ -155,15 +158,15 @@ GetCollectionFilePath(const DBMetaOptions& options, meta::SegmentSchema& table_f
     std::string parent_path = ConstructParentFolder(options.path_, table_file);
     std::string file_path = parent_path + "/" + table_file.file_id_;
 
-    bool s3_enable = false;
-    server::Config& config = server::Config::GetInstance();
-    config.GetStorageConfigS3Enable(s3_enable);
-    fiu_do_on("GetCollectionFilePath.enable_s3", s3_enable = true);
-    if (s3_enable) {
-        /* need not check file existence */
-        table_file.location_ = file_path;
-        return Status::OK();
-    }
+    // bool s3_enable = false;
+    // server::Config& config = server::Config::GetInstance();
+    // config.GetStorageConfigS3Enable(s3_enable);
+    // fiu_do_on("GetCollectionFilePath.enable_s3", s3_enable = true);
+    // if (s3_enable) {
+    //     /* need not check file existence */
+    //     table_file.location_ = file_path;
+    //     return Status::OK();
+    // }
 
     if (boost::filesystem::exists(parent_path)) {
         table_file.location_ = file_path;
@@ -181,7 +184,7 @@ GetCollectionFilePath(const DBMetaOptions& options, meta::SegmentSchema& table_f
 
     std::string msg = "Collection file doesn't exist: " + file_path;
     if (table_file.file_size_ > 0) {  // no need to pop error for empty file
-        ENGINE_LOG_ERROR << msg << " in path: " << options.path_ << " for collection: " << table_file.collection_id_;
+        LOG_ENGINE_ERROR_ << msg << " in path: " << options.path_ << " for collection: " << table_file.collection_id_;
     }
 
     return Status(DB_ERROR, msg);
@@ -219,12 +222,6 @@ IsSameIndex(const CollectionIndex& index1, const CollectionIndex& index2) {
 bool
 IsRawIndexType(int32_t type) {
     return (type == (int32_t)EngineType::FAISS_IDMAP) || (type == (int32_t)EngineType::FAISS_BIN_IDMAP);
-}
-
-bool
-IsBinaryIndexType(int32_t index_type) {
-    return (index_type == (int32_t)engine::EngineType::FAISS_BIN_IDMAP) ||
-           (index_type == (int32_t)engine::EngineType::FAISS_BIN_IVFFLAT);
 }
 
 bool
@@ -297,6 +294,43 @@ ParseMetaUri(const std::string& uri, MetaUriInfo& info) {
     }
 
     return Status::OK();
+}
+
+std::string
+GetIndexName(int32_t index_type) {
+    static std::map<int32_t, std::string> index_type_name = {
+        {(int32_t)engine::EngineType::FAISS_IDMAP, "IDMAP"},
+        {(int32_t)engine::EngineType::FAISS_IVFFLAT, "IVFFLAT"},
+        {(int32_t)engine::EngineType::FAISS_IVFSQ8, "IVFSQ8"},
+        {(int32_t)engine::EngineType::NSG_MIX, "NSG"},
+        {(int32_t)engine::EngineType::ANNOY, "ANNOY"},
+        {(int32_t)engine::EngineType::FAISS_IVFSQ8H, "IVFSQ8H"},
+        {(int32_t)engine::EngineType::FAISS_PQ, "PQ"},
+        {(int32_t)engine::EngineType::SPTAG_KDT, "KDT"},
+        {(int32_t)engine::EngineType::SPTAG_BKT, "BKT"},
+        {(int32_t)engine::EngineType::FAISS_BIN_IDMAP, "IDMAP"},
+        {(int32_t)engine::EngineType::FAISS_BIN_IVFFLAT, "IVFFLAT"},
+    };
+
+    if (index_type_name.find(index_type) == index_type_name.end()) {
+        return "Unknow";
+    }
+
+    return index_type_name[index_type];
+}
+
+void
+SendExitSignal() {
+    LOG_SERVER_INFO_ << "Send SIGUSR2 signal to exit";
+    pid_t pid = getpid();
+    kill(pid, SIGUSR2);
+}
+
+void
+ExitOnWriteError(Status& status) {
+    if (status.code() == SERVER_WRITE_ERROR) {
+        utils::SendExitSignal();
+    }
 }
 
 }  // namespace utils

@@ -19,6 +19,7 @@
 #include "MetaTypes.h"
 #include "db/Options.h"
 #include "db/Types.h"
+#include "db/meta/FilesHolder.h"
 #include "utils/Status.h"
 
 namespace milvus {
@@ -28,6 +29,11 @@ namespace meta {
 static const char* META_ENVIRONMENT = "Environment";
 static const char* META_TABLES = "Tables";
 static const char* META_TABLEFILES = "TableFiles";
+static const char* META_COLLECTIONS = "Collections";
+static const char* META_FIELDS = "Fields";
+static const char* META_COLLECTIONFILES = "CollectionFiles";
+
+class FilesHolder;
 
 class Meta {
     /*
@@ -49,7 +55,7 @@ class Meta {
     DescribeCollection(CollectionSchema& table_schema) = 0;
 
     virtual Status
-    HasCollection(const std::string& collection_id, bool& has_or_not) = 0;
+    HasCollection(const std::string& collection_id, bool& has_or_not, bool is_root = false) = 0;
 
     virtual Status
     AllCollections(std::vector<CollectionSchema>& table_schema_array) = 0;
@@ -73,11 +79,10 @@ class Meta {
     CreateCollectionFile(SegmentSchema& file_schema) = 0;
 
     virtual Status
-    GetCollectionFiles(const std::string& collection_id, const std::vector<size_t>& ids,
-                       SegmentsSchema& table_files) = 0;
+    GetCollectionFiles(const std::string& collection_id, const std::vector<size_t>& ids, FilesHolder& files_holder) = 0;
 
     virtual Status
-    GetCollectionFilesBySegmentId(const std::string& segment_id, SegmentsSchema& table_files) = 0;
+    GetCollectionFilesBySegmentId(const std::string& segment_id, FilesHolder& files_holder) = 0;
 
     virtual Status
     UpdateCollectionFile(SegmentSchema& file_schema) = 0;
@@ -105,6 +110,9 @@ class Meta {
                     uint64_t lsn) = 0;
 
     virtual Status
+    HasPartition(const std::string& collection_id, const std::string& tag, bool& has_or_not) = 0;
+
+    virtual Status
     DropPartition(const std::string& partition_name) = 0;
 
     virtual Status
@@ -114,19 +122,19 @@ class Meta {
     GetPartitionName(const std::string& collection_name, const std::string& tag, std::string& partition_name) = 0;
 
     virtual Status
-    FilesToSearch(const std::string& collection_id, SegmentsSchema& files) = 0;
+    FilesToSearch(const std::string& collection_id, FilesHolder& files_holder) = 0;
 
     virtual Status
-    FilesToMerge(const std::string& collection_id, SegmentsSchema& files) = 0;
+    FilesToMerge(const std::string& collection_id, FilesHolder& files_holder) = 0;
 
     virtual Status
-    FilesToIndex(SegmentsSchema&) = 0;
+    FilesToIndex(FilesHolder& files_holder) = 0;
 
     virtual Status
-    FilesByType(const std::string& collection_id, const std::vector<int>& file_types, SegmentsSchema& files) = 0;
+    FilesByType(const std::string& collection_id, const std::vector<int>& file_types, FilesHolder& files_holder) = 0;
 
     virtual Status
-    FilesByID(const std::vector<size_t>& ids, SegmentsSchema& files) = 0;
+    FilesByID(const std::vector<size_t>& ids, FilesHolder& files_holder) = 0;
 
     virtual Status
     Size(uint64_t& result) = 0;
@@ -151,6 +159,15 @@ class Meta {
 
     virtual Status
     GetGlobalLastLSN(uint64_t& lsn) = 0;
+
+    virtual Status
+    CreateHybridCollection(CollectionSchema& collection_schema, hybrid::FieldsSchema& fields_schema) = 0;
+
+    virtual Status
+    DescribeHybridCollection(CollectionSchema& collection_schema, hybrid::FieldsSchema& fields_schema) = 0;
+
+    virtual Status
+    CreateHybridCollectionFile(SegmentSchema& file_schema) = 0;
 };  // MetaData
 
 using MetaPtr = std::shared_ptr<Meta>;

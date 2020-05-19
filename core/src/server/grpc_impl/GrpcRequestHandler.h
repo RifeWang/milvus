@@ -12,7 +12,6 @@
 #pragma once
 
 #include <grpcpp/server_context.h>
-#include <server/context/Context.h>
 
 #include <cstdint>
 #include <map>
@@ -24,6 +23,7 @@
 #include "grpc/gen-milvus/milvus.grpc.pb.h"
 #include "grpc/gen-status/status.pb.h"
 #include "opentracing/tracer.h"
+#include "server/context/Context.h"
 #include "server/delivery/RequestHandler.h"
 #include "server/grpc_impl/interceptor/GrpcInterceptorHookHandler.h"
 #include "src/utils/Status.h"
@@ -71,7 +71,7 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     OnPreSendMessage(::grpc::experimental::ServerRpcInfo* server_rpc_info,
                      ::grpc::experimental::InterceptorBatchMethods* interceptor_batch_methods) override;
 
-    const std::shared_ptr<Context>&
+    std::shared_ptr<Context>
     GetContext(::grpc::ServerContext* server_context);
 
     void
@@ -180,6 +180,17 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     ::grpc::Status
     CreatePartition(::grpc::ServerContext* context, const ::milvus::grpc::PartitionParam* request,
                     ::milvus::grpc::Status* response) override;
+
+    // *
+    // @brief This method is used to test partition existence.
+    //
+    // @param PartitionParam, target partition.
+    //
+    // @return BoolReply
+    ::grpc::Status
+    HasPartition(::grpc::ServerContext* context, const ::milvus::grpc::PartitionParam* request,
+                 ::milvus::grpc::BoolReply* response);
+
     // *
     // @brief This method is used to show partition information
     //
@@ -208,14 +219,15 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     Insert(::grpc::ServerContext* context, const ::milvus::grpc::InsertParam* request,
            ::milvus::grpc::VectorIds* response) override;
     // *
-    // @brief This method is used to get vector data by id.
+    // @brief This method is used to get vectors data by id array.
     //
-    // @param VectorIdentity, target vector id.
+    // @param VectorsIdentity, target vector id array.
     //
-    // @return VectorData
+    // @return VectorsData
     ::grpc::Status
-    GetVectorByID(::grpc::ServerContext* context, const ::milvus::grpc::VectorIdentity* request,
-                  ::milvus::grpc::VectorData* response);
+    GetVectorsByID(::grpc::ServerContext* context, const ::milvus::grpc::VectorsIdentity* request,
+                   ::milvus::grpc::VectorsData* response);
+
     // *
     // @brief This method is used to get vector ids from a segment
     //
@@ -303,6 +315,75 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     ::grpc::Status
     Compact(::grpc::ServerContext* context, const ::milvus::grpc::CollectionName* request,
             ::milvus::grpc::Status* response);
+
+    /*******************************************New Interface*********************************************/
+
+    ::grpc::Status
+    CreateHybridCollection(::grpc::ServerContext* context, const ::milvus::grpc::Mapping* request,
+                           ::milvus::grpc::Status* response) override;
+
+    //    ::grpc::Status
+    //    HasCollection(::grpc::ServerContext* context,
+    //                  const ::milvus::grpc::CollectionName* request,
+    //                  ::milvus::grpc::BoolReply* response) override;
+    //
+    //    ::grpc::Status
+    //    DropCollection(::grpc::ServerContext* context,
+    //                   const ::milvus::grpc::CollectionName* request,
+    //                   ::milvus::grpc::Status* response) override;
+    //
+    ::grpc::Status
+    DescribeHybridCollection(::grpc::ServerContext* context, const ::milvus::grpc::CollectionName* request,
+                             ::milvus::grpc::Mapping* response) override;
+    //
+    //    ::grpc::Status
+    //    CountCollection(::grpc::ServerContext* context,
+    //                    const ::milvus::grpc::CollectionName* request,
+    //                    ::milvus::grpc::CollectionRowCount* response) override;
+    //
+    //    ::grpc::Status
+    //    ShowCollections(::grpc::ServerContext* context,
+    //                    const ::milvus::grpc::Command* request,
+    //                    ::milvus::grpc::MappingList* response) override;
+    //
+    //    ::grpc::Status
+    //    ShowCollectionInfo(::grpc::ServerContext* context,
+    //                       const ::milvus::grpc::CollectionName* request,
+    //                       ::milvus::grpc::CollectionInfo* response) override;
+    //
+    //    ::grpc::Status
+    //    PreloadCollection(::grpc::ServerContext* context,
+    //                      const ::milvus::grpc::CollectionName* request,
+    //                      ::milvus::grpc::Status* response) override;
+    //
+    ::grpc::Status
+    InsertEntity(::grpc::ServerContext* context, const ::milvus::grpc::HInsertParam* request,
+                 ::milvus::grpc::HEntityIDs* response) override;
+
+    ::grpc::Status
+    HybridSearch(::grpc::ServerContext* context, const ::milvus::grpc::HSearchParam* request,
+                 ::milvus::grpc::TopKQueryResult* response) override;
+    //
+    //    ::grpc::Status
+    //    HybridSearchInSegments(::grpc::ServerContext* context,
+    //                           const ::milvus::
+    //                           grpc::HSearchInSegmentsParam* request,
+    //                           ::milvus::grpc::HQueryResult* response) override;
+    //
+    //    ::grpc::Status
+    //    GetEntityByID(::grpc::ServerContext* context,
+    //                  const ::milvus::grpc::HEntityIdentity* request,
+    //                  ::milvus::grpc::HEntity* response) override;
+    //
+    //    ::grpc::Status
+    //    GetEntityIDs(::grpc::ServerContext* context,
+    //                 const ::milvus::grpc::HGetEntityIDsParam* request,
+    //                 ::milvus::grpc::HEntityIDs* response) override;
+    //
+    //    ::grpc::Status
+    //    DeleteEntitiesByID(::grpc::ServerContext* context,
+    //                       const ::milvus::grpc::HDeleteByIDParam* request,
+    //                       ::milvus::grpc::Status* response) override;
 
     GrpcRequestHandler&
     RegisterRequestHandler(const RequestHandler& handler) {

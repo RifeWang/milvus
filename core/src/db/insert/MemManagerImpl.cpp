@@ -36,7 +36,7 @@ MemManagerImpl::InsertVectors(const std::string& collection_id, int64_t length, 
                               const float* vectors, uint64_t lsn, std::set<std::string>& flushed_tables) {
     flushed_tables.clear();
     if (GetCurrentMem() > options_.insert_buffer_size_) {
-        ENGINE_LOG_DEBUG << "Insert buffer size exceeds limit. Performing force flush";
+        LOG_ENGINE_DEBUG_ << "Insert buffer size exceeds limit. Performing force flush";
         // TODO(zhiru): Don't apply delete here in order to avoid possible concurrency issues with Merge
         auto status = Flush(flushed_tables, false);
         if (!status.ok()) {
@@ -62,12 +62,12 @@ MemManagerImpl::InsertVectors(const std::string& collection_id, int64_t length, 
                               const uint8_t* vectors, uint64_t lsn, std::set<std::string>& flushed_tables) {
     flushed_tables.clear();
     if (GetCurrentMem() > options_.insert_buffer_size_) {
-        ENGINE_LOG_DEBUG << LogOut("[%s][%ld] ", "insert", 0)
-                         << "Insert buffer size exceeds limit. Performing force flush";
+        LOG_ENGINE_DEBUG_ << LogOut("[%s][%ld] ", "insert", 0)
+                          << "Insert buffer size exceeds limit. Performing force flush";
         // TODO(zhiru): Don't apply delete here in order to avoid possible concurrency issues with Merge
         auto status = Flush(flushed_tables, false);
         if (!status.ok()) {
-            ENGINE_LOG_DEBUG << LogOut("[%s][%ld] ", "insert", 0) << "Flush fail: " << status.message();
+            LOG_ENGINE_DEBUG_ << LogOut("[%s][%ld] ", "insert", 0) << "Flush fail: " << status.message();
             return status;
         }
     }
@@ -86,11 +86,52 @@ MemManagerImpl::InsertVectors(const std::string& collection_id, int64_t length, 
 }
 
 Status
+MemManagerImpl::InsertEntities(const std::string& table_id, int64_t length, const IDNumber* vector_ids, int64_t dim,
+                               const float* vectors, const std::unordered_map<std::string, uint64_t>& attr_nbytes,
+                               const std::unordered_map<std::string, uint64_t>& attr_size,
+                               const std::unordered_map<std::string, std::vector<uint8_t>>& attr_data, uint64_t lsn,
+                               std::set<std::string>& flushed_tables) {
+    flushed_tables.clear();
+    if (GetCurrentMem() > options_.insert_buffer_size_) {
+        LOG_ENGINE_DEBUG_ << LogOut("[%s][%ld] ", "insert", 0)
+                          << "Insert buffer size exceeds limit. Performing force flush";
+        auto status = Flush(flushed_tables, false);
+        if (!status.ok()) {
+            LOG_ENGINE_DEBUG_ << LogOut("[%s][%ld] ", "insert", 0) << "Flush fail: " << status.message();
+            return status;
+        }
+    }
+
+    VectorsData vectors_data;
+    vectors_data.vector_count_ = length;
+    vectors_data.float_data_.resize(length * dim);
+    memcpy(vectors_data.float_data_.data(), vectors, length * dim * sizeof(float));
+    vectors_data.id_array_.resize(length);
+    memcpy(vectors_data.id_array_.data(), vector_ids, length * sizeof(IDNumber));
+
+    VectorSourcePtr source = std::make_shared<VectorSource>(vectors_data, attr_nbytes, attr_size, attr_data);
+
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    return InsertEntitiesNoLock(table_id, source, lsn);
+}
+
+Status
 MemManagerImpl::InsertVectorsNoLock(const std::string& collection_id, const VectorSourcePtr& source, uint64_t lsn) {
     MemTablePtr mem = GetMemByTable(collection_id);
     mem->SetLSN(lsn);
 
     auto status = mem->Add(source);
+    return status;
+}
+
+Status
+MemManagerImpl::InsertEntitiesNoLock(const std::string& collection_id, const milvus::engine::VectorSourcePtr& source,
+                                     uint64_t lsn) {
+    MemTablePtr mem = GetMemByTable(collection_id);
+    mem->SetLSN(lsn);
+
+    auto status = mem->AddEntities(source);
     return status;
 }
 
@@ -143,13 +184,13 @@ MemManagerImpl::Flush(const std::string& collection_id, bool apply_delete) {
     std::unique_lock<std::mutex> lock(serialization_mtx_);
     auto max_lsn = GetMaxLSN(temp_immutable_list);
     for (auto& mem : temp_immutable_list) {
-        ENGINE_LOG_DEBUG << "Flushing collection: " << mem->GetTableId();
+        LOG_ENGINE_DEBUG_ << "Flushing collection: " << mem->GetTableId();
         auto status = mem->Serialize(max_lsn, apply_delete);
         if (!status.ok()) {
-            ENGINE_LOG_ERROR << "Flush collection " << mem->GetTableId() << " failed";
+            LOG_ENGINE_ERROR_ << "Flush collection " << mem->GetTableId() << " failed";
             return status;
         }
-        ENGINE_LOG_DEBUG << "Flushed collection: " << mem->GetTableId();
+        LOG_ENGINE_DEBUG_ << "Flushed collection: " << mem->GetTableId();
     }
 
     return Status::OK();
@@ -169,14 +210,14 @@ MemManagerImpl::Flush(std::set<std::string>& table_ids, bool apply_delete) {
     table_ids.clear();
     auto max_lsn = GetMaxLSN(temp_immutable_list);
     for (auto& mem : temp_immutable_list) {
-        ENGINE_LOG_DEBUG << "Flushing collection: " << mem->GetTableId();
+        LOG_ENGINE_DEBUG_ << "Flushing collection: " << mem->GetTableId();
         auto status = mem->Serialize(max_lsn, apply_delete);
         if (!status.ok()) {
-            ENGINE_LOG_ERROR << "Flush collection " << mem->GetTableId() << " failed";
+            LOG_ENGINE_ERROR_ << "Flush collection " << mem->GetTableId() << " failed";
             return status;
         }
         table_ids.insert(mem->GetTableId());
-        ENGINE_LOG_DEBUG << "Flushed collection: " << mem->GetTableId();
+        LOG_ENGINE_DEBUG_ << "Flushed collection: " << mem->GetTableId();
     }
 
     meta_->SetGlobalLastLSN(max_lsn);
@@ -194,7 +235,7 @@ MemManagerImpl::ToImmutable(const std::string& collection_id) {
             mem_id_map_.erase(memIt);
         }
         //        std::string err_msg = "Could not find collection = " + collection_id + " to flush";
-        //        ENGINE_LOG_ERROR << err_msg;
+        //        LOG_ENGINE_ERROR_ << err_msg;
         //        return Status(DB_NOT_FOUND, err_msg);
     }
 
@@ -279,7 +320,7 @@ MemManagerImpl::GetMaxLSN(const MemList& tables) {
 
 void
 MemManagerImpl::OnInsertBufferSizeChanged(int64_t value) {
-    options_.insert_buffer_size_ = value * ONE_GB;
+    options_.insert_buffer_size_ = value * GB;
 }
 
 }  // namespace engine

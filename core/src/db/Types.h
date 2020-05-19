@@ -17,6 +17,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -47,26 +48,16 @@ struct VectorsData {
     IDNumbers id_array_;
 };
 
+struct Entity {
+    uint64_t entity_count_ = 0;
+    std::vector<uint8_t> attr_value_;
+    std::unordered_map<std::string, std::vector<std::string>> attr_data_;
+    std::unordered_map<std::string, VectorsData> vector_data_;
+    IDNumbers id_array_;
+};
+
 using File2ErrArray = std::map<std::string, std::vector<std::string>>;
 using Table2FileErr = std::map<std::string, File2ErrArray>;
-using File2RefCount = std::map<std::string, int64_t>;
-using Table2FileRef = std::map<std::string, File2RefCount>;
-
-struct SegmentStat {
-    std::string name_;
-    int64_t row_count_ = 0;
-    std::string index_name_;
-    int64_t data_size_ = 0;
-};
-
-struct PartitionStat {
-    std::string tag_;
-    std::vector<SegmentStat> segments_stat_;
-};
-
-struct CollectionInfo {
-    std::vector<PartitionStat> partitions_stat_;
-};
 
 static const char* DEFAULT_PARTITON_TAG = "_default";
 

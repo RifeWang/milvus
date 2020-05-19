@@ -15,6 +15,7 @@
 #include "metrics/SystemInfo.h"
 #include "utils/Log.h"
 
+#include <unistd.h>
 #include <string>
 #include <utility>
 
@@ -25,20 +26,29 @@ Status
 PrometheusMetrics::Init() {
     try {
         Config& config = Config::GetInstance();
-        CONFIG_CHECK(config.GetMetricConfigEnableMonitor(startup_));
+        STATUS_CHECK(config.GetMetricConfigEnableMonitor(startup_));
         if (!startup_) {
             return Status::OK();
         }
 
         // Following should be read from config file.
-        std::string push_port, push_address;
-        CONFIG_CHECK(config.GetMetricConfigPort(push_port));
-        CONFIG_CHECK(config.GetMetricConfigAddress(push_address));
+        std::string server_port, push_port, push_address;
+        STATUS_CHECK(config.GetServerConfigPort(server_port));
+        STATUS_CHECK(config.GetMetricConfigPort(push_port));
+        STATUS_CHECK(config.GetMetricConfigAddress(push_address));
 
         const std::string uri = std::string("/metrics");
         // const std::size_t num_threads = 2;
 
-        auto labels = prometheus::Gateway::GetInstanceLabel("pushgateway");
+        std::string hostportstr;
+        char hostname[1024];
+        if (gethostname(hostname, sizeof(hostname)) == 0) {
+            hostportstr = std::string(hostname) + ":" + server_port;
+        } else {
+            hostportstr = "pushgateway";
+        }
+
+        auto labels = prometheus::Gateway::GetInstanceLabel(hostportstr);
 
         // Init pushgateway
         gateway_ = std::make_shared<prometheus::Gateway>(push_address, push_port, "milvus_metrics", labels);
@@ -49,7 +59,7 @@ PrometheusMetrics::Init() {
         // Pushgateway Registry
         gateway_->RegisterCollectable(registry_);
     } catch (std::exception& ex) {
-        SERVER_LOG_ERROR << "Failed to connect prometheus server: " << std::string(ex.what());
+        LOG_SERVER_ERROR_ << "Failed to connect prometheus server: " << std::string(ex.what());
         return Status(SERVER_UNEXPECTED_ERROR, ex.what());
     }
 
@@ -158,26 +168,32 @@ PrometheusMetrics::OctetsSet() {
         return;
     }
 
-    // get old stats and reset them
-    uint64_t old_inoctets = SystemInfo::GetInstance().get_inoctets();
-    uint64_t old_outoctets = SystemInfo::GetInstance().get_octets();
-    auto old_time = SystemInfo::GetInstance().get_nettime();
-    std::pair<uint64_t, uint64_t> in_and_out_octets = SystemInfo::GetInstance().Octets();
-    SystemInfo::GetInstance().set_inoctets(in_and_out_octets.first);
-    SystemInfo::GetInstance().set_outoctets(in_and_out_octets.second);
-    SystemInfo::GetInstance().set_nettime();
+    try {
+        // get old stats and reset them
+        uint64_t old_inoctets = SystemInfo::GetInstance().get_inoctets();
+        uint64_t old_outoctets = SystemInfo::GetInstance().get_octets();
+        auto old_time = SystemInfo::GetInstance().get_nettime();
 
-    //
-    constexpr double micro_to_second = 1e-6;
-    auto now_time = std::chrono::system_clock::now();
-    auto total_microsecond = METRICS_MICROSECONDS(old_time, now_time);
-    auto total_second = total_microsecond * micro_to_second;
-    if (total_second == 0) {
-        return;
+        std::pair<uint64_t, uint64_t> in_and_out_octets = SystemInfo::GetInstance().Octets();
+        SystemInfo::GetInstance().set_inoctets(in_and_out_octets.first);
+        SystemInfo::GetInstance().set_outoctets(in_and_out_octets.second);
+        SystemInfo::GetInstance().set_nettime();
+
+        //
+        constexpr double micro_to_second = 1e-6;
+        auto now_time = std::chrono::system_clock::now();
+        auto total_microsecond = METRICS_MICROSECONDS(old_time, now_time);
+        auto total_second = total_microsecond * micro_to_second;
+        if (total_second == 0) {
+            return;
+        }
+
+        inoctets_gauge_.Set((in_and_out_octets.first - old_inoctets) / total_second);
+        outoctets_gauge_.Set((in_and_out_octets.second - old_outoctets) / total_second);
+    } catch (std::exception& ex) {
+        std::string msg = "Failed to set in/out octets, reason: " + std::string(ex.what());
+        LOG_SERVER_ERROR_ << msg;
     }
-
-    inoctets_gauge_.Set((in_and_out_octets.first - old_inoctets) / total_second);
-    outoctets_gauge_.Set((in_and_out_octets.second - old_outoctets) / total_second);
 }
 
 void

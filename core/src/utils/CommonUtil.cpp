@@ -182,7 +182,7 @@ std::string
 CommonUtil::GetExePath() {
     const size_t buf_len = 1024;
     char buf[buf_len];
-    size_t cnt = readlink("/proc/self/exe", buf, buf_len);
+    ssize_t cnt = readlink("/proc/self/exe", buf, buf_len);
     fiu_do_on("CommonUtil.GetExePath.readlink_fail", cnt = -1);
     if (cnt < 0 || cnt >= buf_len) {
         return "";
@@ -228,7 +228,7 @@ CommonUtil::ConvertTime(tm time_struct, time_t& time_integer) {
     time_integer = mktime(&time_struct);
 }
 
-#ifdef MILVUS_ENABLE_PROFILING
+#ifdef ENABLE_CPU_PROFILING
 std::string
 CommonUtil::GetCurrentTimeStr() {
     time_t tt;
@@ -247,7 +247,7 @@ CommonUtil::GetCurrentTimeStr() {
 void
 CommonUtil::EraseFromCache(const std::string& item_key) {
     if (item_key.empty()) {
-        SERVER_LOG_ERROR << "Empty key cannot be erased from cache";
+        LOG_SERVER_ERROR_ << "Empty key cannot be erased from cache";
         return;
     }
 
@@ -256,7 +256,7 @@ CommonUtil::EraseFromCache(const std::string& item_key) {
 #ifdef MILVUS_GPU_VERSION
     server::Config& config = server::Config::GetInstance();
     std::vector<int64_t> gpus;
-    Status s = config.GetGpuResourceConfigSearchResources(gpus);
+    config.GetGpuResourceConfigSearchResources(gpus);
     for (auto& gpu : gpus) {
         cache::GpuCacheMgr::GetInstance(gpu)->EraseItem(item_key);
     }

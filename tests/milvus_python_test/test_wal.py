@@ -21,24 +21,24 @@ class TestWalBase:
     ******************************************************************
     """
     @pytest.mark.timeout(WAL_TIMEOUT)
-    def test_wal_add_vectors(self, connect, collection):
+    def test_wal_insert(self, connect, collection):
         '''
         target: add vectors in WAL
         method: add vectors and flush when WAL is enabled
         expected: status ok, vectors added
         '''
         vectors = gen_vector(nb, dim)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         assert status.OK()
         status = connect.flush([collection])
         assert status.OK()
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         assert res == nb
-        status, res = connect.get_vector_by_id(collection, ids[0]) 
+        status, res = connect.get_entity_by_id(collection, [ids[0]]) 
         logging.getLogger().info(res)
         assert status.OK()
-        assert_equal_vector(res, vectors[0])
+        assert_equal_vector(res[0], vectors[0])
 
     @pytest.mark.timeout(WAL_TIMEOUT)
     def test_wal_delete_vectors(self, connect, collection):
@@ -48,16 +48,16 @@ class TestWalBase:
         expected: status ok, vectors deleted
         '''
         vectors = gen_vector(nb, dim)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         assert status.OK()
         connect.flush([collection])
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
-        status = connect.delete_by_id(collection, ids)
+        status = connect.delete_entity_by_id(collection, ids)
         assert status.OK()
         status = connect.flush([collection])
         assert status.OK()
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         assert res == 0
 
@@ -69,13 +69,13 @@ class TestWalBase:
         expected: status ok, search with vector have result
         '''
         vector = gen_single_vector(dim)
-        status, ids = connect.add_vectors(collection, vector)
+        status, ids = connect.insert(collection, vector)
         assert status.OK()
         connect.flush([collection])
-        status = connect.delete_by_id(collection, [0])
+        status = connect.delete_entity_by_id(collection, [0])
         assert status.OK()
         status = connect.flush([collection])
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         assert res == 1
 
@@ -87,17 +87,17 @@ class TestWalBase:
         expected: status not ok
         '''
         vectors = gen_vector(nb, dim)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         assert status.OK()
         status = connect.flush([collection])
-        status = connect.delete_by_id(collection, [0])
+        status = connect.delete_entity_by_id(collection, [0])
         connect.flush([collection])
         collection_new = gen_unique_str()
-        status = connect.delete_by_id(collection_new, ids)
+        status = connect.delete_entity_by_id(collection_new, ids)
         assert not status.OK()
         status = connect.flush([collection])
         assert status.OK()
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         assert res == nb
 
@@ -109,10 +109,10 @@ class TestWalBase:
         expected: status ok, add request is recovered and vectors added
         '''
         vector = gen_single_vector(dim)
-        status, ids = connect.add_vectors(collection, vector)
+        status, ids = connect.insert(collection, vector)
         assert status.OK()
         status = connect.flush([collection])
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         logging.getLogger().info(res) # should be 0 because no auto flush
         logging.getLogger().info("Stop server and restart")
@@ -120,10 +120,10 @@ class TestWalBase:
         # time.sleep(15)
         status = connect.flush([collection])
         assert status.OK()
-        status, res = connect.count_collection(collection)
+        status, res = connect.count_entities(collection)
         assert status.OK()
         assert res == 1
-        status, res = connect.get_vector_by_id(collection, ids[0]) 
+        status, res = connect.get_entity_by_id(collection, [ids[0]]) 
         logging.getLogger().info(res)
         assert status.OK()
-        assert_equal_vector(res, vector[0])
+        assert_equal_vector(res[0], vector[0])

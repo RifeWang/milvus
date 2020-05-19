@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "segment/Types.h"
@@ -34,6 +35,13 @@ class SegmentWriter {
 
     Status
     AddVectors(const std::string& name, const std::vector<uint8_t>& data, const std::vector<doc_id_t>& uids);
+
+    Status
+    AddVectors(const std::string& name, const uint8_t* data, uint64_t size, const std::vector<doc_id_t>& uids);
+
+    Status
+    AddAttrs(const std::string& name, const std::unordered_map<std::string, uint64_t>& attr_nbytes,
+             const std::unordered_map<std::string, std::vector<uint8_t>>& attr_data, const std::vector<doc_id_t>& uids);
 
     Status
     SetVectorIndex(const knowhere::VecIndexPtr& index);
@@ -68,6 +76,9 @@ class SegmentWriter {
  private:
     Status
     WriteVectors();
+
+    Status
+    WriteAttrs();
 
     Status
     WriteBloomFilter();

@@ -20,6 +20,9 @@ include_directories(${MILVUS_ENGINE_SRC})
 include_directories(${MILVUS_THIRDPARTY_SRC})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
+include_directories(${MILVUS_ENGINE_SRC}/grpc/gen-status)
+include_directories(${MILVUS_ENGINE_SRC}/grpc/gen-milvus)
+
 aux_source_directory(${MILVUS_ENGINE_SRC}/cache cache_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/config config_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/config/handler config_handler_files)
@@ -28,7 +31,10 @@ aux_source_directory(${MILVUS_ENGINE_SRC}/db db_main_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/engine db_engine_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/insert db_insert_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/meta db_meta_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/db/merge db_merge_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/wal db_wal_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/search search_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/query query_files)
 
 set(grpc_service_files
         ${MILVUS_ENGINE_SRC}/grpc/gen-milvus/milvus.grpc.pb.cc
@@ -43,7 +49,7 @@ aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/event scheduler_event_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/job scheduler_job_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/resource scheduler_resource_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/task scheduler_task_files)
-aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/optimizer scheduler_optimizer_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/selector scheduler_selector_files)
 set(scheduler_files
         ${scheduler_main_files}
         ${scheduler_action_files}
@@ -51,7 +57,7 @@ set(scheduler_files
         ${scheduler_job_files}
         ${scheduler_resource_files}
         ${scheduler_task_files}
-        ${scheduler_optimizer_files}
+        ${scheduler_selector_files}
         )
 
 aux_source_directory(${MILVUS_THIRDPARTY_SRC}/easyloggingpp thirdparty_easyloggingpp_files)
@@ -64,6 +70,7 @@ set(thirdparty_files
         )
 
 aux_source_directory(${MILVUS_ENGINE_SRC}/server server_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/server/init server_init_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/grpc_impl grpc_impl_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/grpc_impl/interceptor grpc_interceptor_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/context server_context_files)
@@ -89,10 +96,12 @@ set(web_server_files
 
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery server_delivery_impl_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/request server_delivery_request_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/hybrid_request server_delivery_hybrid_request_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/strategy server_delivery_strategy_files)
 set(server_delivery_files
         ${server_delivery_impl_files}
         ${server_delivery_request_files}
+        ${server_delivery_hybrid_request_files}
         ${server_delivery_strategy_files})
 
 aux_source_directory(${MILVUS_ENGINE_SRC}/utils utils_files)
@@ -135,6 +144,7 @@ set(common_files
         ${db_engine_files}
         ${db_insert_files}
         ${db_meta_files}
+        ${db_merge_files}
         ${db_wal_files}
         ${metrics_files}
         ${thirdparty_files}
@@ -142,11 +152,23 @@ set(common_files
         ${wrapper_files}
         ${storage_files}
         ${helper_files}
+        ${server_init_files}
         ${server_context_files}
+        ${grpc_service_files}
         ${tracing_files}
         ${codecs_files}
         ${codecs_default_files}
         ${segment_files}
+        ${search_files}
+        ${query_files}
+        )
+
+set(grpc_lib
+        grpcpp_channelz
+        grpc++
+        grpc
+        grpc_protobuf
+        grpc_protoc
         )
 
 set(unittest_libs
@@ -164,6 +186,7 @@ set(unittest_libs
         opentracing
         opentracing_mocktracer
         fiu
+        ${grpc_lib}
         )
 
 if (MILVUS_WITH_AWS)

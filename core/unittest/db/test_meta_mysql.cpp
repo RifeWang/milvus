@@ -14,6 +14,8 @@
 #include "db/meta/MySQLMetaImpl.h"
 #include "db/utils.h"
 
+#include <fiu-control.h>
+#include <fiu-local.h>
 #include <gtest/gtest.h>
 #include <mysql++/mysql++.h>
 #include <stdlib.h>
@@ -21,9 +23,6 @@
 #include <boost/filesystem/operations.hpp>
 #include <iostream>
 #include <thread>
-#include <fiu-local.h>
-#include <fiu-control.h>
-#include <src/db/OngoingFileChecker.h>
 
 const char* FAILED_CONNECT_SQL_SERVER = "Failed to connect to meta server(mysql)";
 const char* COLLECTION_ALREADY_EXISTS = "Collection already exists and it is in delete state, please wait a second";
@@ -68,7 +67,7 @@ TEST_F(MySqlMetaTest, COLLECTION_TEST) {
     ASSERT_FALSE(stat.ok());
     fiu_disable("MySQLMetaImpl.CreateCollection.throw_exception");
 
-    //ensure collection exists
+    // ensure collection exists
     stat = impl_->CreateCollection(collection);
     FIU_ENABLE_FIU("MySQLMetaImpl.CreateCollection.schema_TO_DELETE");
     stat = impl_->CreateCollection(collection);
@@ -122,6 +121,34 @@ TEST_F(MySqlMetaTest, COLLECTION_TEST) {
     ASSERT_TRUE(status.ok());
 }
 
+TEST_F(MySqlMetaTest, HYBRID_COLLECTION_TEST) {
+    auto collection_id = "meta_test_hybrid";
+
+    milvus::engine::meta::CollectionSchema collection;
+    collection.collection_id_ = collection_id;
+    collection.dimension_ = 128;
+    milvus::engine::meta::hybrid::FieldsSchema fields_schema;
+    fields_schema.fields_schema_.resize(2);
+    fields_schema.fields_schema_[0].collection_id_ = collection_id;
+    fields_schema.fields_schema_[0].field_name_ = "field_0";
+    fields_schema.fields_schema_[0].field_type_ = (int32_t)milvus::engine::meta::hybrid::DataType::INT64;
+    fields_schema.fields_schema_[0].field_params_ = "";
+
+    fields_schema.fields_schema_[1].collection_id_ = collection_id;
+    fields_schema.fields_schema_[1].field_name_ = "field_1";
+    fields_schema.fields_schema_[1].field_type_ = (int32_t)milvus::engine::meta::hybrid::DataType::VECTOR;
+    fields_schema.fields_schema_[1].field_params_ = "";
+
+    auto status = impl_->CreateHybridCollection(collection, fields_schema);
+    ASSERT_TRUE(status.ok());
+    milvus::engine::meta::CollectionSchema describe_collection;
+    milvus::engine::meta::hybrid::FieldsSchema describe_fields;
+    describe_collection.collection_id_ = collection_id;
+    status = impl_->DescribeHybridCollection(describe_collection, describe_fields);
+    ASSERT_TRUE(status.ok());
+    ASSERT_EQ(describe_fields.fields_schema_.size(), 2);
+}
+
 TEST_F(MySqlMetaTest, COLLECTION_FILE_TEST) {
     auto collection_id = "meta_test_table";
     fiu_init(0);
@@ -136,7 +163,7 @@ TEST_F(MySqlMetaTest, COLLECTION_FILE_TEST) {
     collection.dimension_ = 256;
     status = impl_->CreateCollection(collection);
 
-    //CreateCollectionFile
+    // CreateCollectionFile
     milvus::engine::meta::SegmentSchema table_file;
     table_file.collection_id_ = collection.collection_id_;
     status = impl_->CreateCollectionFile(table_file);
@@ -158,7 +185,7 @@ TEST_F(MySqlMetaTest, COLLECTION_FILE_TEST) {
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.DescribeCollection.throw_exception");
 
-    //Count
+    // Count
     uint64_t cnt = 0;
     status = impl_->Count(collection_id, cnt);
     //    ASSERT_TRUE(status.ok());
@@ -183,7 +210,7 @@ TEST_F(MySqlMetaTest, COLLECTION_FILE_TEST) {
     auto new_file_type = milvus::engine::meta::SegmentSchema::INDEX;
     table_file.file_type_ = new_file_type;
 
-    //UpdateCollectionFile
+    // UpdateCollectionFile
     FIU_ENABLE_FIU("MySQLMetaImpl.UpdateCollectionFile.null_connection");
     status = impl_->UpdateCollectionFile(table_file);
     ASSERT_FALSE(status.ok());
@@ -231,44 +258,43 @@ TEST_F(MySqlMetaTest, COLLECTION_FILE_TEST) {
     ASSERT_TRUE(status.ok());
 
     std::vector<size_t> ids = {table_file.id_};
-    milvus::engine::meta::SegmentsSchema files;
-    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files);
-    ASSERT_EQ(files.size(), 0UL);
+    milvus::engine::meta::FilesHolder files_holder;
+    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), 0UL);
 
     FIU_ENABLE_FIU("MySQLMetaImpl.GetCollectionFiles.null_connection");
-    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files);
+    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.GetCollectionFiles.null_connection");
 
     FIU_ENABLE_FIU("MySQLMetaImpl.GetCollectionFiles.throw_exception");
-    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files);
+    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.GetCollectionFiles.throw_exception");
 
     ids.clear();
-    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files);
+    status = impl_->GetCollectionFiles(table_file.collection_id_, ids, files_holder);
     ASSERT_TRUE(status.ok());
 
     table_file.collection_id_ = collection.collection_id_;
     table_file.file_type_ = milvus::engine::meta::SegmentSchema::RAW;
     status = impl_->CreateCollectionFile(table_file);
     ids = {table_file.id_};
-    status = impl_->FilesByID(ids, files);
-    ASSERT_EQ(files.size(), 1UL);
+    status = impl_->FilesByID(ids, files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), 1UL);
 
     table_file.collection_id_ = collection.collection_id_;
     table_file.file_type_ = milvus::engine::meta::SegmentSchema::TO_DELETE;
     status = impl_->CreateCollectionFile(table_file);
 
-    std::vector<int> files_to_delete;
-    files_to_delete.push_back(milvus::engine::meta::SegmentSchema::TO_DELETE);
-    status = impl_->FilesByType(collection_id, files_to_delete, files_schema);
+    files_holder.ReleaseFiles();
+    std::vector<int> files_to_delete = {milvus::engine::meta::SegmentSchema::TO_DELETE};
+    status = impl_->FilesByType(collection_id, files_to_delete, files_holder);
     ASSERT_TRUE(status.ok());
 
     table_file.collection_id_ = collection_id;
     table_file.file_type_ = milvus::engine::meta::SegmentSchema::TO_DELETE;
-    table_file.file_id_ = files_schema.front().file_id_;
-    milvus::engine::OngoingFileChecker::GetInstance().MarkOngoingFile(table_file);
+    table_file.file_id_ = files_holder.HoldFiles().front().file_id_;
     status = impl_->CleanUpFilesWithTTL(1UL);
     ASSERT_TRUE(status.ok());
 
@@ -306,8 +332,10 @@ TEST_F(MySqlMetaTest, COLLECTION_FILE_ROW_COUNT_TEST) {
     ASSERT_EQ(table_file.row_count_, cnt);
 
     std::vector<size_t> ids = {table_file.id_};
-    milvus::engine::meta::SegmentsSchema schemas;
-    status = impl_->GetCollectionFiles(collection_id, ids, schemas);
+    milvus::engine::meta::FilesHolder files_holder;
+    status = impl_->GetCollectionFiles(collection_id, ids, files_holder);
+
+    milvus::engine::meta::SegmentsSchema& schemas = files_holder.HoldFiles();
     ASSERT_EQ(schemas.size(), 1UL);
     ASSERT_EQ(table_file.row_count_, schemas[0].row_count_);
     ASSERT_EQ(table_file.file_id_, schemas[0].file_id_);
@@ -371,11 +399,11 @@ TEST_F(MySqlMetaTest, ARCHIVE_TEST_DAYS) {
     impl.Archive();
     int i = 0;
 
-    milvus::engine::meta::SegmentsSchema files_get;
-    status = impl.GetCollectionFiles(table_file.collection_id_, ids, files_get);
+    milvus::engine::meta::FilesHolder files_holder;
+    status = impl.GetCollectionFiles(table_file.collection_id_, ids, files_holder);
     ASSERT_TRUE(status.ok());
 
-    for (auto& file : files_get) {
+    for (auto& file : files_holder.HoldFiles()) {
         if (days[i] < days_num) {
             ASSERT_EQ(file.file_type_, milvus::engine::meta::SegmentSchema::NEW);
         }
@@ -385,21 +413,22 @@ TEST_F(MySqlMetaTest, ARCHIVE_TEST_DAYS) {
     std::vector<int> file_types = {
         (int)milvus::engine::meta::SegmentSchema::NEW,
     };
-    milvus::engine::meta::SegmentsSchema table_files;
-    status = impl.FilesByType(collection_id, file_types, table_files);
-    ASSERT_FALSE(table_files.empty());
+
+    files_holder.ReleaseFiles();
+    status = impl.FilesByType(collection_id, file_types, files_holder);
+    ASSERT_FALSE(files_holder.HoldFiles().empty());
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesByType.null_connection");
-    table_files.clear();
-    status = impl.FilesByType(collection_id, file_types, table_files);
+    files_holder.ReleaseFiles();
+    status = impl.FilesByType(collection_id, file_types, files_holder);
     ASSERT_FALSE(status.ok());
-    ASSERT_TRUE(table_files.empty());
+    ASSERT_TRUE(files_holder.HoldFiles().empty());
     fiu_disable("MySQLMetaImpl.FilesByType.null_connection");
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesByType.throw_exception");
-    status = impl.FilesByType(collection_id, file_types, table_files);
+    status = impl.FilesByType(collection_id, file_types, files_holder);
     ASSERT_FALSE(status.ok());
-    ASSERT_TRUE(table_files.empty());
+    ASSERT_TRUE(files_holder.HoldFiles().empty());
     fiu_disable("MySQLMetaImpl.FilesByType.throw_exception");
 
     status = impl.UpdateCollectionFilesToIndex(collection_id);
@@ -432,9 +461,9 @@ TEST_F(MySqlMetaTest, ARCHIVE_TEST_DISK) {
     collection.collection_id_ = collection_id;
     auto status = impl.CreateCollection(collection);
 
-    milvus::engine::meta::CollectionSchema table_schema;
-    table_schema.collection_id_ = "";
-    status = impl.CreateCollection(table_schema);
+    milvus::engine::meta::CollectionSchema collection_schema;
+    collection_schema.collection_id_ = "";
+    status = impl.CreateCollection(collection_schema);
 
     milvus::engine::meta::SegmentsSchema files;
     milvus::engine::meta::SegmentSchema table_file;
@@ -446,7 +475,7 @@ TEST_F(MySqlMetaTest, ARCHIVE_TEST_DISK) {
     for (auto i = 0; i < cnt; ++i) {
         status = impl.CreateCollectionFile(table_file);
         table_file.file_type_ = milvus::engine::meta::SegmentSchema::NEW;
-        table_file.file_size_ = each_size * milvus::engine::G;
+        table_file.file_size_ = each_size * milvus::engine::GB;
         status = impl.UpdateCollectionFile(table_file);
         files.push_back(table_file);
         ids.push_back(table_file.id_);
@@ -463,11 +492,11 @@ TEST_F(MySqlMetaTest, ARCHIVE_TEST_DISK) {
     impl.Archive();
     int i = 0;
 
-    milvus::engine::meta::SegmentsSchema files_get;
-    status = impl.GetCollectionFiles(table_file.collection_id_, ids, files_get);
+    milvus::engine::meta::FilesHolder files_holder;
+    status = impl.GetCollectionFiles(table_file.collection_id_, ids, files_holder);
     ASSERT_TRUE(status.ok());
 
-    for (auto& file : files_get) {
+    for (auto& file : files_holder.HoldFiles()) {
         if (i >= 5) {
             ASSERT_EQ(file.file_type_, milvus::engine::meta::SegmentSchema::NEW);
         }
@@ -486,7 +515,7 @@ TEST_F(MySqlMetaTest, INVALID_INITILIZE_TEST) {
     milvus::engine::DBMetaOptions meta = GetOptions().meta_;
     {
         FIU_ENABLE_FIU("MySQLMetaImpl.Initialize.fail_create_directory");
-        //delete directory created by SetUp
+        // delete directory created by SetUp
         boost::filesystem::remove_all(meta.path_);
         ASSERT_ANY_THROW(milvus::engine::meta::MySQLMetaImpl impl(meta, GetOptions().mode_));
         fiu_disable("MySQLMetaImpl.Initialize.fail_create_directory");
@@ -596,96 +625,93 @@ TEST_F(MySqlMetaTest, COLLECTION_FILES_TEST) {
     ASSERT_TRUE(status.ok());
     ASSERT_EQ(total_row_count, raw_files_cnt + to_index_files_cnt + index_files_cnt);
 
-    milvus::engine::meta::SegmentsSchema files;
-    status = impl_->FilesToIndex(files);
-    ASSERT_EQ(files.size(), to_index_files_cnt);
+    milvus::engine::meta::FilesHolder files_holder;
+    status = impl_->FilesToIndex(files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), to_index_files_cnt);
 
-    milvus::engine::meta::SegmentsSchema table_files;
-    status = impl_->FilesToMerge(collection.collection_id_, table_files);
-    ASSERT_EQ(table_files.size(), raw_files_cnt);
+    files_holder.ReleaseFiles();
+    status = impl_->FilesToMerge(collection.collection_id_, files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), raw_files_cnt);
 
+    files_holder.ReleaseFiles();
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToMerge.null_connection");
-    status = impl_->FilesToMerge(collection.collection_id_, table_files);
+    status = impl_->FilesToMerge(collection.collection_id_, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToMerge.null_connection");
 
+    files_holder.ReleaseFiles();
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToMerge.throw_exception");
-    status = impl_->FilesToMerge(collection.collection_id_, table_files);
+    status = impl_->FilesToMerge(collection.collection_id_, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToMerge.throw_exception");
 
-    status = impl_->FilesToMerge("notexist", table_files);
+    files_holder.ReleaseFiles();
+    status = impl_->FilesToMerge("notexist", files_holder);
     ASSERT_EQ(status.code(), milvus::DB_NOT_FOUND);
 
     table_file.file_type_ = milvus::engine::meta::SegmentSchema::RAW;
-    table_file.file_size_ = milvus::engine::ONE_GB + 1;
+    table_file.file_size_ = milvus::engine::GB + 1;
     status = impl_->UpdateCollectionFile(table_file);
     ASSERT_TRUE(status.ok());
-#if 0
-    {
-        //skip large files
-        milvus::engine::meta::SegmentsSchema table_files;
-        status = impl_->FilesToMerge(collection.collection_id_, table_files);
-        ASSERT_EQ(dated_files[table_file.date_].size(), raw_files_cnt);
-    }
-#endif
-    status = impl_->FilesToIndex(files);
-    ASSERT_EQ(files.size(), to_index_files_cnt);
+
+    files_holder.ReleaseFiles();
+    status = impl_->FilesToIndex(files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), to_index_files_cnt);
 
     FIU_ENABLE_FIU("MySQLMetaImpl.DescribeCollection.throw_exception");
-    status = impl_->FilesToIndex(files);
+    status = impl_->FilesToIndex(files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.DescribeCollection.throw_exception");
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToIndex.null_connection");
-    status = impl_->FilesToIndex(files);
+    status = impl_->FilesToIndex(files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToIndex.null_connection");
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToIndex.throw_exception");
-    status = impl_->FilesToIndex(files);
+    status = impl_->FilesToIndex(files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToIndex.throw_exception");
 
-    table_files.clear();
-    status = impl_->FilesToSearch(collection_id, table_files);
-    ASSERT_EQ(table_files.size(), to_index_files_cnt + raw_files_cnt + index_files_cnt);
+    files_holder.ReleaseFiles();
+    status = impl_->FilesToSearch(collection_id, files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), to_index_files_cnt + raw_files_cnt + index_files_cnt);
 
-    table_files.clear();
+    files_holder.ReleaseFiles();
     std::vector<size_t> ids = {9999999999UL};
-    status = impl_->FilesByID(ids, table_files);
-    ASSERT_EQ(table_files.size(), 0);
+    status = impl_->FilesByID(ids, files_holder);
+    ASSERT_EQ(files_holder.HoldFiles().size(), 0);
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToSearch.null_connection");
-    status = impl_->FilesToSearch(collection_id, table_files);
+    status = impl_->FilesToSearch(collection_id, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToSearch.null_connection");
 
     FIU_ENABLE_FIU("MySQLMetaImpl.FilesToSearch.throw_exception");
-    status = impl_->FilesToSearch(collection_id, table_files);
+    status = impl_->FilesToSearch(collection_id, files_holder);
     ASSERT_FALSE(status.ok());
     fiu_disable("MySQLMetaImpl.FilesToSearch.throw_exception");
 
-    status = impl_->FilesToSearch("notexist", table_files);
+    status = impl_->FilesToSearch("notexist", files_holder);
     ASSERT_EQ(status.code(), milvus::DB_NOT_FOUND);
 
-    table_files.clear();
+    files_holder.ReleaseFiles();
     std::vector<int> file_types;
-    status = impl_->FilesByType(collection.collection_id_, file_types, table_files);
-    ASSERT_TRUE(table_files.empty());
+    status = impl_->FilesByType(collection.collection_id_, file_types, files_holder);
+    ASSERT_TRUE(files_holder.HoldFiles().empty());
     ASSERT_FALSE(status.ok());
 
     file_types = {
-        milvus::engine::meta::SegmentSchema::NEW, milvus::engine::meta::SegmentSchema::NEW_MERGE,
+        milvus::engine::meta::SegmentSchema::NEW,       milvus::engine::meta::SegmentSchema::NEW_MERGE,
         milvus::engine::meta::SegmentSchema::NEW_INDEX, milvus::engine::meta::SegmentSchema::TO_INDEX,
-        milvus::engine::meta::SegmentSchema::INDEX, milvus::engine::meta::SegmentSchema::RAW,
+        milvus::engine::meta::SegmentSchema::INDEX,     milvus::engine::meta::SegmentSchema::RAW,
         milvus::engine::meta::SegmentSchema::BACKUP,
     };
-    status = impl_->FilesByType(collection.collection_id_, file_types, table_files);
+    status = impl_->FilesByType(collection.collection_id_, file_types, files_holder);
     ASSERT_TRUE(status.ok());
     uint64_t total_cnt = new_index_files_cnt + new_merge_files_cnt + backup_files_cnt + new_files_cnt + raw_files_cnt +
                          to_index_files_cnt + index_files_cnt;
-    ASSERT_EQ(table_files.size(), total_cnt);
+    ASSERT_EQ(files_holder.HoldFiles().size(), total_cnt);
 
     FIU_ENABLE_FIU("MySQLMetaImpl.DeleteCollectionFiles.null_connection");
     status = impl_->DeleteCollectionFiles(collection_id);
@@ -812,4 +838,3 @@ TEST_F(MySqlMetaTest, INDEX_TEST) {
     status = impl_->UpdateCollectionFilesToIndex(collection_id);
     ASSERT_TRUE(status.ok());
 }
-

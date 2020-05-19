@@ -19,6 +19,7 @@
 #include "server/Server.h"
 #include "src/version.h"
 #include "utils/SignalUtil.h"
+#include "utils/Status.h"
 
 INITIALIZE_EASYLOGGINGPP
 
@@ -75,9 +76,9 @@ main(int argc, char* argv[]) {
     std::string config_filename, log_config_file;
     std::string pid_filename;
     std::string app_name = argv[0];
+    milvus::Status s;
 
     milvus::server::Server& server = milvus::server::Server::GetInstance();
-    milvus::Status s;
 
     if (argc < 2) {
         print_help(app_name);
@@ -137,6 +138,7 @@ main(int argc, char* argv[]) {
     if (s.ok()) {
         std::cout << "Milvus server started successfully!" << std::endl;
     } else {
+        std::cout << s.message() << std::endl;
         goto FAIL;
     }
 

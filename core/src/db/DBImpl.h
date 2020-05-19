@@ -20,15 +20,17 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "config/handler/CacheConfigHandler.h"
 #include "config/handler/EngineConfigHandler.h"
 #include "db/DB.h"
 #include "db/IndexFailedChecker.h"
-#include "db/OngoingFileChecker.h"
 #include "db/Types.h"
 #include "db/insert/MemManager.h"
+#include "db/merge/MergeManager.h"
+#include "db/meta/FilesHolder.h"
 #include "utils/ThreadPool.h"
 #include "wal/WalManager.h"
 
@@ -73,7 +75,7 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     AllCollections(std::vector<meta::CollectionSchema>& collection_schema_array) override;
 
     Status
-    GetCollectionInfo(const std::string& collection_id, CollectionInfo& collection_info) override;
+    GetCollectionInfo(const std::string& collection_id, std::string& collection_info) override;
 
     Status
     PreloadCollection(const std::string& collection_id) override;
@@ -87,6 +89,9 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     Status
     CreatePartition(const std::string& collection_id, const std::string& partition_name,
                     const std::string& partition_tag) override;
+
+    Status
+    HasPartition(const std::string& collection_id, const std::string& tag, bool& has_or_not) override;
 
     Status
     DropPartition(const std::string& partition_name) override;
@@ -114,10 +119,11 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     Flush() override;
 
     Status
-    Compact(const std::string& collection_id) override;
+    Compact(const std::string& collection_id, double threshold = 0.0) override;
 
     Status
-    GetVectorByID(const std::string& collection_id, const IDNumber& vector_id, VectorsData& vector) override;
+    GetVectorsByID(const std::string& collection_id, const IDNumbers& id_array,
+                   std::vector<engine::VectorsData>& vectors) override;
 
     Status
     GetVectorIDs(const std::string& collection_id, const std::string& segment_id, IDNumbers& vector_ids) override;
@@ -126,7 +132,8 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     //    Merge(const std::set<std::string>& collection_ids) override;
 
     Status
-    CreateIndex(const std::string& collection_id, const CollectionIndex& index) override;
+    CreateIndex(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                const CollectionIndex& index) override;
 
     Status
     DescribeIndex(const std::string& collection_id, CollectionIndex& index) override;
@@ -135,9 +142,29 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     DropIndex(const std::string& collection_id) override;
 
     Status
-    QueryByID(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
-              const std::vector<std::string>& partition_tags, uint64_t k, const milvus::json& extra_params,
-              IDNumber vector_id, ResultIds& result_ids, ResultDistances& result_distances) override;
+    CreateHybridCollection(meta::CollectionSchema& collection_schema,
+                           meta::hybrid::FieldsSchema& fields_schema) override;
+
+    Status
+    DescribeHybridCollection(meta::CollectionSchema& collection_schema,
+                             meta::hybrid::FieldsSchema& fields_schema) override;
+
+    Status
+    InsertEntities(const std::string& collection_name, const std::string& partition_tag,
+                   const std::vector<std::string>& field_names, engine::Entity& entity,
+                   std::unordered_map<std::string, meta::hybrid::DataType>& field_types) override;
+
+    Status
+    HybridQuery(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                const std::vector<std::string>& partition_tags, context::HybridSearchContextPtr hybrid_search_context,
+                query::GeneralQueryPtr general_query,
+                std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
+                ResultIds& result_ids, ResultDistances& result_distances) override;
+
+    Status
+    QueryByIDs(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+               const std::vector<std::string>& partition_tags, uint64_t k, const milvus::json& extra_params,
+               const IDNumbers& id_array, ResultIds& result_ids, ResultDistances& result_distances) override;
 
     Status
     Query(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
@@ -161,13 +188,20 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
 
  private:
     Status
-    QueryAsync(const std::shared_ptr<server::Context>& context, const meta::SegmentsSchema& files, uint64_t k,
+    QueryAsync(const std::shared_ptr<server::Context>& context, meta::FilesHolder& files_holder, uint64_t k,
                const milvus::json& extra_params, const VectorsData& vectors, ResultIds& result_ids,
                ResultDistances& result_distances);
 
     Status
-    GetVectorByIdHelper(const std::string& collection_id, IDNumber vector_id, VectorsData& vector,
-                        const meta::SegmentsSchema& files);
+    HybridQueryAsync(const std::shared_ptr<server::Context>& context, const std::string& table_id,
+                     meta::FilesHolder& files_holder, context::HybridSearchContextPtr hybrid_search_context,
+                     query::GeneralQueryPtr general_query,
+                     std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
+                     ResultIds& result_ids, ResultDistances& result_distances);
+
+    Status
+    GetVectorsByIdHelper(const std::string& collection_id, const IDNumbers& id_array,
+                         std::vector<engine::VectorsData>& vectors, meta::FilesHolder& files_holder);
 
     void
     InternalFlush(const std::string& collection_id = "");
@@ -196,14 +230,11 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     void
     StartMergeTask();
 
-    Status
-    MergeFiles(const std::string& collection_id, const meta::SegmentsSchema& files);
-
-    Status
-    BackgroundMergeFiles(const std::string& collection_id);
-
     void
     BackgroundMerge(std::set<std::string> collection_ids);
+
+    Status
+    MergeHybridFiles(const std::string& table_id, meta::FilesHolder& files_holder);
 
     void
     StartBuildIndexTask();
@@ -212,7 +243,7 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     BackgroundBuildIndex();
 
     Status
-    CompactFile(const std::string& collection_id, const meta::SegmentSchema& file,
+    CompactFile(const std::string& collection_id, double threshold, const meta::SegmentSchema& file,
                 meta::SegmentsSchema& files_to_update);
 
     /*
@@ -222,10 +253,7 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
 
     Status
     GetFilesToBuildIndex(const std::string& collection_id, const std::vector<int>& file_types,
-                         meta::SegmentsSchema& files);
-
-    Status
-    GetFilesToSearch(const std::string& collection_id, meta::SegmentsSchema& files);
+                         meta::FilesHolder& files_holder);
 
     Status
     GetPartitionByTag(const std::string& collection_id, const std::string& partition_tag, std::string& partition_name);
@@ -241,7 +269,8 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     UpdateCollectionIndexRecursively(const std::string& collection_id, const CollectionIndex& index);
 
     Status
-    WaitCollectionIndexRecursively(const std::string& collection_id, const CollectionIndex& index);
+    WaitCollectionIndexRecursively(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                                   const CollectionIndex& index);
 
     Status
     DropCollectionIndexRecursively(const std::string& collection_id);
@@ -252,6 +281,12 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     Status
     ExecWalRecord(const wal::MXLogRecord& record);
 
+    void
+    SuspendIfFirst();
+
+    void
+    ResumeIfLast();
+
  private:
     DBOptions options_;
 
@@ -259,6 +294,7 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
 
     meta::MetaPtr meta_ptr_;
     MemManagerPtr mem_mgr_;
+    MergeManagerPtr merge_mgr_ptr_;
 
     std::shared_ptr<wal::WalManager> wal_mgr_;
     std::thread bg_wal_thread_;
@@ -314,6 +350,7 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     SimpleWaitNotify swn_index_;
 
     SimpleWaitNotify flush_req_swn_;
+    SimpleWaitNotify index_req_swn_;
 
     ThreadPool merge_thread_pool_;
     std::mutex merge_result_mutex_;
@@ -329,6 +366,9 @@ class DBImpl : public DB, public server::CacheConfigHandler, public server::Engi
     IndexFailedChecker index_failed_checker_;
 
     std::mutex flush_merge_compact_mutex_;
+
+    int64_t live_search_num_ = 0;
+    std::mutex suspend_build_mutex_;
 };  // DBImpl
 
 }  // namespace engine

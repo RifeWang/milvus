@@ -1,5 +1,5 @@
 """
-   For testing index operations, including `create_index`, `describe_index` and `drop_index` interfaces
+   For testing index operations, including `create_index`, `get_index_info` and `drop_index` interfaces
 """
 import logging
 import pytest
@@ -68,7 +68,7 @@ class TestIndexBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
 
@@ -96,7 +96,7 @@ class TestIndexBase:
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
         status = connect.create_partition(collection, tag)
-        status, ids = connect.add_vectors(collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(collection, vectors, partition_tag=tag)
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
 
@@ -111,23 +111,23 @@ class TestIndexBase:
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
         status = connect.create_partition(collection, tag)
-        status, ids = connect.add_vectors(collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(collection, vectors, partition_tag=tag)
         connect.flush()
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
 
-    @pytest.mark.level(2)
-    def test_create_index_without_connect(self, dis_connect, collection):
-        '''
-        target: test create index without connection
-        method: create collection and add vectors in it, check if added successfully
-        expected: raise exception
-        '''
-        nlist = NLIST
-        index_type = IndexType.IVF_SQ8
-        index_param = {"nlist": nlist}
-        with pytest.raises(Exception) as e:
-            status = dis_connect.create_index(collection, index_type, index_param)
+    # @pytest.mark.level(2)
+    # def test_create_index_without_connect(self, dis_connect, collection):
+    #     '''
+    #     target: test create index without connection
+    #     method: create collection and add vectors in it, check if added successfully
+    #     expected: raise exception
+    #     '''
+    #     nlist = NLIST
+    #     index_type = IndexType.IVF_SQ8
+    #     index_param = {"nlist": nlist}
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.create_index(collection, index_type, index_param)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_index_search_with_query_vectors(self, connect, collection, get_simple_index):
@@ -139,13 +139,13 @@ class TestIndexBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, index_type, index_param)
-        logging.getLogger().info(connect.describe_index(collection))
+        logging.getLogger().info(connect.get_index_info(collection))
         query_vecs = [vectors[0], vectors[1], vectors[2]]
         top_k = 5
         search_param = get_search_param(index_type)
-        status, result = connect.search_vectors(collection, top_k, query_vecs, params=search_param)
+        status, result = connect.search(collection, top_k, query_vecs, params=search_param)
         assert status.OK()
         assert len(result) == len(query_vecs)
         logging.getLogger().info(result)
@@ -158,7 +158,7 @@ class TestIndexBase:
         method: create collection and add vectors in it, create index
         expected: return code equals to 0, and search success
         '''
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
 
         def build(connect):
             status = connect.create_index(collection, IndexType.IVFLAT, {"nlist": NLIST})
@@ -166,11 +166,8 @@ class TestIndexBase:
 
         threads_num = 8
         threads = []
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
-
         for i in range(threads_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(host=args["ip"], port=args["port"], handler=args["handler"])
             t = threading.Thread(target=build, args=(m,))
             threads.append(t)
             t.start()
@@ -181,11 +178,12 @@ class TestIndexBase:
         query_vec = [vectors[0]]
         top_k = 1
         search_param = {"nprobe": nprobe}
-        status, result = connect.search_vectors(collection, top_k, query_vec, params=search_param)
+        status, result = connect.search(collection, top_k, query_vec, params=search_param)
         assert len(result) == 1
         assert len(result[0]) == top_k
         assert result[0][0].distance == 0.0
 
+    @pytest.mark.level(2)
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_index_multithread_multicollection(self, connect, args):
         '''
@@ -196,7 +194,6 @@ class TestIndexBase:
         threads_num = 8
         loop_num = 8
         threads = []
-
         collection = []
         j = 0
         while j < (threads_num*loop_num):
@@ -213,26 +210,21 @@ class TestIndexBase:
             i = 0
             while i < loop_num:
                 # assert connect.has_collection(collection[ids*process_num+i])
-                status, ids = connect.add_vectors(collection[ids*threads_num+i], vectors)
-
+                status, ids = connect.insert(collection[ids*threads_num+i], vectors)
                 status = connect.create_index(collection[ids*threads_num+i], IndexType.IVFLAT, {"nlist": NLIST})
                 assert status.OK()
                 query_vec = [vectors[0]]
                 top_k = 1
                 search_param = {"nprobe": nprobe}
-                status, result = connect.search_vectors(collection[ids*threads_num+i], top_k, query_vec, params=search_param)
+                status, result = connect.search(collection[ids*threads_num+i], top_k, query_vec, params=search_param)
                 assert len(result) == 1
                 assert len(result[0]) == top_k
                 assert result[0][0].distance == 0.0
                 i = i + 1
-
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
-
         for i in range(threads_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(host=args["ip"], port=args["port"], handler=args["handler"])
             ids = i
-            t = threading.Thread(target=create_index, args=(m,ids))
+            t = threading.Thread(target=create_index, args=(m, ids))
             threads.append(t)
             t.start()
             time.sleep(0.2)
@@ -242,12 +234,12 @@ class TestIndexBase:
     @pytest.mark.timeout(BUILD_TIMEOUT)
     @pytest.mark.level(2)
     def test_create_index_a_multithreads(self, connect, collection, args):
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         def build(connect):
             status = connect.create_index(collection, IndexType.IVFLAT, {"nlist": NLIST})
             assert status.OK()
         def count(connect):
-            status, count = connect.count_collection(collection)
+            status, count = connect.count_entities(collection)
             assert status.OK()
             assert count == nb
 
@@ -255,8 +247,7 @@ class TestIndexBase:
         threads = []
         uri = "tcp://%s:%s" % (args["ip"], args["port"])
         for i in range(threads_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(host=args["ip"], port=args["port"], handler=args["handler"])
             if(i % 2 == 0):
                 p = threading.Thread(target=build, args=(m,))
             else:
@@ -277,7 +268,7 @@ class TestIndexBase:
         method: create collection and add vectors in it, create index
         expected: return code equals to 0, and search success
         '''
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
 
         def build(connect):
             status = connect.create_index(collection, IndexType.IVFLAT, {"nlist": NLIST})
@@ -285,11 +276,8 @@ class TestIndexBase:
 
         process_num = 8
         processes = []
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
-
         for i in range(process_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(host=args["ip"], port=args["port"], handler=args["handler"])
             p = Process(target=build, args=(m,))
             processes.append(p)
             p.start()
@@ -300,7 +288,7 @@ class TestIndexBase:
         query_vec = [vectors[0]]
         top_k = 1
         search_param = {"nprobe": nprobe}
-        status, result = connect.search_vectors(collection, top_k, query_vec, params=search_param)
+        status, result = connect.search(collection, top_k, query_vec, params=search_param)
         assert len(result) == 1
         assert len(result[0]) == top_k
         assert result[0][0].distance == 0.0
@@ -333,24 +321,21 @@ class TestIndexBase:
             i = 0
             while i < loop_num:
                 # assert connect.has_collection(collection[ids*process_num+i])
-                status, ids = connect.add_vectors(collection[ids*process_num+i], vectors)
+                status, ids = connect.insert(collection[ids*process_num+i], vectors)
 
                 status = connect.create_index(collection[ids*process_num+i], IndexType.IVFLAT, {"nlist": NLIST})
                 assert status.OK()
                 query_vec = [vectors[0]]
                 top_k = 1
                 search_param = {"nprobe": nprobe}
-                status, result = connect.search_vectors(collection[ids*process_num+i], top_k, query_vec, params=search_param)
+                status, result = connect.search(collection[ids*process_num+i], top_k, query_vec, params=search_param)
                 assert len(result) == 1
                 assert len(result[0]) == top_k
                 assert result[0][0].distance == 0.0
                 i = i + 1
 
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
-
         for i in range(process_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(host=args["ip"], port=args["port"], handler=args["handler"])
             ids = i
             p = Process(target=create_index, args=(m,ids))
             processes.append(p)
@@ -387,7 +372,7 @@ class TestIndexBase:
             status = connect.create_index(collection_name, index_type, index_param)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
-    def test_create_index_no_vectors_then_add_vectors(self, connect, collection, get_simple_index):
+    def test_create_index_no_vectors_then_insert(self, connect, collection, get_simple_index):
         '''
         target: test create index interface when there is no vectors in collection, and does not affect the subsequent process
         method: create collection and add no vectors in it, and then create index, add vectors in it
@@ -396,9 +381,10 @@ class TestIndexBase:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         status = connect.create_index(collection, index_type, index_param)
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         assert status.OK()
 
+    @pytest.mark.level(2)
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_same_index_repeatedly(self, connect, collection, get_simple_index):
         '''
@@ -412,6 +398,7 @@ class TestIndexBase:
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
 
+    @pytest.mark.level(2)
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_different_index_repeatedly(self, connect, collection):
         '''
@@ -420,7 +407,7 @@ class TestIndexBase:
         expected: return code 0, and describe index result equals with the second index params
         '''
         nlist = NLIST
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         index_type_1 = IndexType.IVF_SQ8
         index_type_2 = IndexType.IVFLAT
         indexs = [{"index_type": index_type_1, "index_param": {"nlist": nlist}}, {"index_type": index_type_2, "index_param": {"nlist": nlist}}]
@@ -428,18 +415,18 @@ class TestIndexBase:
         for index in indexs:
             status = connect.create_index(collection, index["index_type"], index["index_param"])
             assert status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         assert result._params["nlist"] == nlist
         assert result._collection_name == collection
         assert result._index_type == index_type_2
 
     """
     ******************************************************************
-      The following cases are used to test `describe_index` function
+      The following cases are used to test `get_index_info` function
     ******************************************************************
     """
 
-    def test_describe_index(self, connect, collection, get_index):
+    def test_get_index_info(self, connect, collection, get_index):
         '''
         target: test describe index interface
         method: create collection and add vectors in it, create index, call describe index
@@ -448,10 +435,10 @@ class TestIndexBase:
         index_param = get_index["index_param"]
         index_type = get_index["index_type"]
         logging.getLogger().info(get_index)
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, index_type, index_param)
         if status.OK():
-            status, result = connect.describe_index(collection)
+            status, result = connect.get_index_info(collection)
             logging.getLogger().info(result)
             assert result._params == index_param
             assert result._collection_name == collection
@@ -477,12 +464,12 @@ class TestIndexBase:
             index_param = get_simple_index["index_param"]
             index_type = get_simple_index["index_type"]
             logging.getLogger().info(get_simple_index)
-            status, ids = connect.add_vectors(collection_name=collection_name, records=vectors)
+            status, ids = connect.insert(collection_name=collection_name, records=vectors)
             status = connect.create_index(collection_name, index_type, index_param)
             assert status.OK()
 
         for i in range(10):
-            status, result = connect.describe_index(collection_list[i])
+            status, result = connect.get_index_info(collection_list[i])
             logging.getLogger().info(result)
             assert result._params == index_param
             assert result._collection_name == collection_list[i]
@@ -491,22 +478,22 @@ class TestIndexBase:
         for i in range(10):
             status = connect.drop_index(collection_list[i])
             assert status.OK()
-            status, result = connect.describe_index(collection_list[i])
+            status, result = connect.get_index_info(collection_list[i])
             logging.getLogger().info(result)
             assert result._collection_name == collection_list[i]
             assert result._index_type == IndexType.FLAT
 
-    @pytest.mark.level(2)
-    def test_describe_index_without_connect(self, dis_connect, collection):
-        '''
-        target: test describe index without connection
-        method: describe index, and check if describe successfully
-        expected: raise exception
-        '''
-        with pytest.raises(Exception) as e:
-            status = dis_connect.describe_index(collection)
+    # @pytest.mark.level(2)
+    # def test_get_index_info_without_connect(self, dis_connect, collection):
+    #     '''
+    #     target: test describe index without connection
+    #     method: describe index, and check if describe successfully
+    #     expected: raise exception
+    #     '''
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.get_index_info(collection)
 
-    def test_describe_index_collection_not_existed(self, connect):
+    def test_get_index_info_collection_not_existed(self, connect):
         '''
         target: test describe index interface when collection name not existed
         method: create collection and add vectors in it, create index
@@ -514,10 +501,10 @@ class TestIndexBase:
         expected: return code not equals to 0, describe index failed
         '''
         collection_name = gen_unique_str(self.__class__.__name__)
-        status, result = connect.describe_index(collection_name)
+        status, result = connect.get_index_info(collection_name)
         assert not status.OK()
 
-    def test_describe_index_collection_None(self, connect):
+    def test_get_index_info_collection_None(self, connect):
         '''
         target: test describe index interface when collection name is None
         method: create collection and add vectors in it, create index with an collection_name: None
@@ -525,17 +512,17 @@ class TestIndexBase:
         '''
         collection_name = None
         with pytest.raises(Exception) as e:
-            status = connect.describe_index(collection_name)
+            status = connect.get_index_info(collection_name)
 
-    def test_describe_index_not_create(self, connect, collection):
+    def test_get_index_info_not_create(self, connect, collection):
         '''
         target: test describe index interface when index not created
         method: create collection and add vectors in it, create index
             , make sure the collection name not in index
         expected: return code not equals to 0, describe index failed
         '''
-        status, ids = connect.add_vectors(collection, vectors)
-        status, result = connect.describe_index(collection)
+        status, ids = connect.insert(collection, vectors)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         assert status.OK()
         # assert result._params["nlist"] == index_params["nlist"]
@@ -556,18 +543,19 @@ class TestIndexBase:
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         status = connect.drop_index(collection)
         assert status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         assert result._collection_name == collection
         assert result._index_type == IndexType.FLAT
 
+    @pytest.mark.level(2)
     def test_drop_index_repeatly(self, connect, collection, get_simple_index):
         '''
         target: test drop index repeatly
@@ -576,29 +564,29 @@ class TestIndexBase:
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         status = connect.drop_index(collection)
         assert status.OK()
         status = connect.drop_index(collection)
         assert status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         assert result._collection_name == collection
         assert result._index_type == IndexType.FLAT
 
-    @pytest.mark.level(2)
-    def test_drop_index_without_connect(self, dis_connect, collection):
-        '''
-        target: test drop index without connection
-        method: drop index, and check if drop successfully
-        expected: raise exception
-        '''
-        with pytest.raises(Exception) as e:
-            status = dis_connect.drop_index(collection)
+    # @pytest.mark.level(2)
+    # def test_drop_index_without_connect(self, dis_connect, collection):
+    #     '''
+    #     target: test drop index without connection
+    #     method: drop index, and check if drop successfully
+    #     expected: raise exception
+    #     '''
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.drop_index(collection)
 
     def test_drop_index_collection_not_existed(self, connect):
         '''
@@ -627,14 +615,15 @@ class TestIndexBase:
         method: create collection and add vectors in it, create index
         expected: return code not equals to 0, drop index failed
         '''
-        status, ids = connect.add_vectors(collection, vectors)
-        status, result = connect.describe_index(collection)
+        status, ids = connect.insert(collection, vectors)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         # no create index
         status = connect.drop_index(collection)
         logging.getLogger().info(status)
         assert status.OK()
 
+    @pytest.mark.level(2)
     def test_create_drop_index_repeatly(self, connect, collection, get_simple_index):
         '''
         target: test create / drop index repeatly, use the same index params
@@ -643,15 +632,15 @@ class TestIndexBase:
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         for i in range(2):
             status = connect.create_index(collection, index_type, index_param)
             assert status.OK()
-            status, result = connect.describe_index(collection)
+            status, result = connect.get_index_info(collection)
             logging.getLogger().info(result)
             status = connect.drop_index(collection)
             assert status.OK()
-            status, result = connect.describe_index(collection)
+            status, result = connect.get_index_info(collection)
             logging.getLogger().info(result)
             assert result._collection_name == collection
             assert result._index_type == IndexType.FLAT
@@ -664,15 +653,15 @@ class TestIndexBase:
         '''
         nlist = NLIST
         indexs = [{"index_type": IndexType.IVFLAT, "index_param": {"nlist": nlist}}, {"index_type": IndexType.IVF_SQ8, "index_param": {"nlist": nlist}}]
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         for i in range(2):
             status = connect.create_index(collection, indexs[i]["index_type"], indexs[i]["index_param"])
             assert status.OK()
-            status, result = connect.describe_index(collection)
+            status, result = connect.get_index_info(collection)
             logging.getLogger().info(result)
             status = connect.drop_index(collection)
             assert status.OK()
-            status, result = connect.describe_index(collection)
+            status, result = connect.get_index_info(collection)
             logging.getLogger().info(result)
             assert result._collection_name == collection
             assert result._index_type == IndexType.FLAT
@@ -724,7 +713,7 @@ class TestIndexIP:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ip_collection, index_type, index_param)
         assert status.OK()
 
@@ -739,40 +728,40 @@ class TestIndexIP:
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
         status = connect.create_partition(ip_collection, tag)
-        status, ids = connect.add_vectors(ip_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(ip_collection, vectors, partition_tag=tag)
         status = connect.create_index(ip_collection, index_type, index_param)
         assert status.OK()
 
-    @pytest.mark.level(2)
-    def test_create_index_without_connect(self, dis_connect, ip_collection):
-        '''
-        target: test create index without connection
-        method: create collection and add vectors in it, check if added successfully
-        expected: raise exception
-        '''
-        nlist = NLIST
-        index_type = IndexType.IVF_SQ8
-        index_param = {"nlist": nlist}
-        with pytest.raises(Exception) as e:
-            status = dis_connect.create_index(ip_collection, index_type, index_param)
+    # @pytest.mark.level(2)
+    # def test_create_index_without_connect(self, dis_connect, ip_collection):
+    #     '''
+    #     target: test create index without connection
+    #     method: create collection and add vectors in it, check if added successfully
+    #     expected: raise exception
+    #     '''
+    #     nlist = NLIST
+    #     index_type = IndexType.IVF_SQ8
+    #     index_param = {"nlist": nlist}
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.create_index(ip_collection, index_type, index_param)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_index_search_with_query_vectors(self, connect, ip_collection, get_simple_index):
         '''
         target: test create index interface, search with more query vectors
-        method: create collection and add vectors in it, create index
+        method: create collection and add vectors in it, create index, with no manual flush 
         expected: return code equals to 0, and search success
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ip_collection, index_type, index_param)
-        logging.getLogger().info(connect.describe_index(ip_collection))
+        logging.getLogger().info(connect.get_index_info(ip_collection))
         query_vecs = [vectors[0], vectors[1], vectors[2]]
         top_k = 5
         search_param = get_search_param(index_type)
-        status, result = connect.search_vectors(ip_collection, top_k, query_vecs, params=search_param)
+        status, result = connect.search(ip_collection, top_k, query_vecs, params=search_param)
         logging.getLogger().info(result)
         assert status.OK()
         assert len(result) == len(query_vecs)
@@ -786,19 +775,16 @@ class TestIndexIP:
         method: create collection and add vectors in it, create index
         expected: return code equals to 0, and search success
         '''
-        status, ids = connect.add_vectors(ip_collection, vectors)
-
+        status, ids = connect.insert(ip_collection, vectors)
         def build(connect):
             status = connect.create_index(ip_collection, IndexType.IVFLAT, {"nlist": NLIST})
             assert status.OK()
 
         process_num = 8
         processes = []
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
 
         for i in range(process_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(args["ip"], args["port"], handler=args["handler"])
             p = Process(target=build, args=(m,))
             processes.append(p)
             p.start()
@@ -809,7 +795,7 @@ class TestIndexIP:
         query_vec = [vectors[0]]
         top_k = 1
         search_param = {"nprobe": nprobe}
-        status, result = connect.search_vectors(ip_collection, top_k, query_vec, params=search_param)
+        status, result = connect.search(ip_collection, top_k, query_vec, params=search_param)
         assert len(result) == 1
         assert len(result[0]) == top_k
         assert result[0][0].distance == 0.0
@@ -840,24 +826,21 @@ class TestIndexIP:
             i = 0
             while i < loop_num:
                 # assert connect.has_collection(collection[ids*process_num+i])
-                status, ids = connect.add_vectors(collection[ids*process_num+i], vectors)
+                status, ids = connect.insert(collection[ids*process_num+i], vectors)
 
                 status = connect.create_index(collection[ids*process_num+i], IndexType.IVFLAT, {"nlist": NLIST})
                 assert status.OK()
                 query_vec = [vectors[0]]
                 top_k = 1
                 search_param = {"nprobe": nprobe}
-                status, result = connect.search_vectors(collection[ids*process_num+i], top_k, query_vec, params=search_param)
+                status, result = connect.search(collection[ids*process_num+i], top_k, query_vec, params=search_param)
                 assert len(result) == 1
                 assert len(result[0]) == top_k
                 assert result[0][0].distance == 0.0
                 i = i + 1
 
-        uri = "tcp://%s:%s" % (args["ip"], args["port"])
-
         for i in range(process_num):
-            m = get_milvus(args["handler"])
-            m.connect(uri=uri)
+            m = get_milvus(args["ip"], args["port"], handler=args["handler"])
             ids = i
             p = Process(target=create_index, args=(m,ids))
             processes.append(p)
@@ -879,7 +862,7 @@ class TestIndexIP:
         assert status.OK()
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
-    def test_create_index_no_vectors_then_add_vectors(self, connect, ip_collection, get_simple_index):
+    def test_create_index_no_vectors_then_insert(self, connect, ip_collection, get_simple_index):
         '''
         target: test create index interface when there is no vectors in collection, and does not affect the subsequent process
         method: create collection and add no vectors in it, and then create index, add vectors in it
@@ -888,7 +871,7 @@ class TestIndexIP:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         status = connect.create_index(ip_collection, index_type, index_param)
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         assert status.OK()
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
@@ -899,7 +882,7 @@ class TestIndexIP:
         expected: return code success, and search ok
         '''
         nlist = NLIST
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         index_type = IndexType.IVF_SQ8
         index_param = {"nlist": nlist}
         status = connect.create_index(ip_collection, index_type, index_param)
@@ -908,7 +891,7 @@ class TestIndexIP:
         query_vec = [vectors[0]]
         top_k = 1
         search_param = {"nprobe": nprobe}
-        status, result = connect.search_vectors(ip_collection, top_k, query_vec, params=search_param)
+        status, result = connect.search(ip_collection, top_k, query_vec, params=search_param)
         assert len(result) == 1
         assert len(result[0]) == top_k
 
@@ -920,7 +903,7 @@ class TestIndexIP:
         expected: return code 0, and describe index result equals with the second index params
         '''
         nlist = NLIST
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         index_type_1 = IndexType.IVF_SQ8
         index_type_2 = IndexType.IVFLAT
         indexs = [{"index_type": index_type_1, "index_param": {"nlist": nlist}}, {"index_type": index_type_2, "index_param": {"nlist": nlist}}]
@@ -928,18 +911,18 @@ class TestIndexIP:
         for index in indexs:
             status = connect.create_index(ip_collection, index["index_type"], index["index_param"])
             assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         assert result._params["nlist"] == nlist
         assert result._collection_name == ip_collection
         assert result._index_type == index_type_2
 
     """
     ******************************************************************
-      The following cases are used to test `describe_index` function
+      The following cases are used to test `get_index_info` function
     ******************************************************************
     """
 
-    def test_describe_index(self, connect, ip_collection, get_simple_index):
+    def test_get_index_info(self, connect, ip_collection, get_simple_index):
         '''
         target: test describe index interface
         method: create collection and add vectors in it, create index, call describe index
@@ -948,9 +931,9 @@ class TestIndexIP:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
-        # status, ids = connect.add_vectors(ip_collection, vectors[:5000])
+        # status, ids = connect.insert(ip_collection, vectors[:5000])
         status = connect.create_index(ip_collection, index_type, index_param)
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ip_collection
         status, mode = connect._cmd("mode")
@@ -961,7 +944,7 @@ class TestIndexIP:
             assert result._index_type == index_type
             assert result._params == index_param
 
-    def test_describe_index_partition(self, connect, ip_collection, get_simple_index):
+    def test_get_index_info_partition(self, connect, ip_collection, get_simple_index):
         '''
         target: test describe index interface
         method: create collection, create partition and add vectors in it, create index, call describe index
@@ -971,15 +954,15 @@ class TestIndexIP:
         index_type = get_simple_index["index_type"]
         logging.getLogger().info(get_simple_index)
         status = connect.create_partition(ip_collection, tag)
-        status, ids = connect.add_vectors(ip_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(ip_collection, vectors, partition_tag=tag)
         status = connect.create_index(ip_collection, index_type, index_param)
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._params == index_param
         assert result._collection_name == ip_collection
         assert result._index_type == index_type
 
-    def test_describe_index_partition_A(self, connect, ip_collection, get_simple_index):
+    def test_get_index_info_partition_A(self, connect, ip_collection, get_simple_index):
         '''
         target: test describe index interface
         method: create collection, create partitions and add vectors in it, create index on partitions, call describe index
@@ -991,10 +974,10 @@ class TestIndexIP:
         logging.getLogger().info(get_simple_index)
         status = connect.create_partition(ip_collection, tag)
         status = connect.create_partition(ip_collection, new_tag)
-        status, ids = connect.add_vectors(ip_collection, vectors, partition_tag=tag)
-        status, ids = connect.add_vectors(ip_collection, vectors, partition_tag=new_tag)
+        # status, ids = connect.insert(ip_collection, vectors, partition_tag=tag)
+        # status, ids = connect.insert(ip_collection, vectors, partition_tag=new_tag)
         status = connect.create_index(ip_collection, index_type, index_param)
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._params == index_param
         assert result._collection_name == ip_collection
@@ -1020,11 +1003,11 @@ class TestIndexIP:
             index_param = get_simple_index["index_param"]
             index_type = get_simple_index["index_type"]
             logging.getLogger().info(get_simple_index)
-            status, ids = connect.add_vectors(collection_name=collection_name, records=vectors)
+            status, ids = connect.insert(collection_name=collection_name, records=vectors)
             status = connect.create_index(collection_name, index_type, index_param)
             assert status.OK()
         for i in range(10):
-            status, result = connect.describe_index(collection_list[i])
+            status, result = connect.get_index_info(collection_list[i])
             logging.getLogger().info(result)
             assert result._params == index_param
             assert result._collection_name == collection_list[i]
@@ -1032,30 +1015,30 @@ class TestIndexIP:
         for i in range(10):
             status = connect.drop_index(collection_list[i])
             assert status.OK()
-            status, result = connect.describe_index(collection_list[i])
+            status, result = connect.get_index_info(collection_list[i])
             logging.getLogger().info(result)
             assert result._collection_name == collection_list[i]
             assert result._index_type == IndexType.FLAT
 
-    @pytest.mark.level(2)
-    def test_describe_index_without_connect(self, dis_connect, ip_collection):
-        '''
-        target: test describe index without connection
-        method: describe index, and check if describe successfully
-        expected: raise exception
-        '''
-        with pytest.raises(Exception) as e:
-            status = dis_connect.describe_index(ip_collection)
+    # @pytest.mark.level(2)
+    # def test_get_index_info_without_connect(self, dis_connect, ip_collection):
+    #     '''
+    #     target: test describe index without connection
+    #     method: describe index, and check if describe successfully
+    #     expected: raise exception
+    #     '''
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.get_index_info(ip_collection)
 
-    def test_describe_index_not_create(self, connect, ip_collection):
+    def test_get_index_info_not_create(self, connect, ip_collection):
         '''
         target: test describe index interface when index not created
         method: create collection and add vectors in it, create index
             , make sure the collection name not in index
         expected: return code not equals to 0, describe index failed
         '''
-        status, ids = connect.add_vectors(ip_collection, vectors)
-        status, result = connect.describe_index(ip_collection)
+        status, ids = connect.insert(ip_collection, vectors)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert status.OK()
         # assert result._params["nlist"] == index_params["nlist"]
@@ -1078,17 +1061,17 @@ class TestIndexIP:
         index_type = get_simple_index["index_type"]
         status, mode = connect._cmd("mode")
         assert status.OK()
-        # status, ids = connect.add_vectors(ip_collection, vectors)
+        # status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ip_collection, index_type, index_param)
         if str(mode) == "GPU" and (index_type == IndexType.IVF_PQ):
             assert not status.OK()
         else:
             assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(ip_collection)
         assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ip_collection
         assert result._index_type == IndexType.FLAT
@@ -1102,14 +1085,14 @@ class TestIndexIP:
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
         status = connect.create_partition(ip_collection, tag)
-        status, ids = connect.add_vectors(ip_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(ip_collection, vectors, partition_tag=tag)
         status = connect.create_index(ip_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(ip_collection)
         assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ip_collection
         assert result._index_type == IndexType.FLAT
@@ -1125,16 +1108,17 @@ class TestIndexIP:
         index_type = get_simple_index["index_type"]
         status = connect.create_partition(ip_collection, tag)
         status = connect.create_partition(ip_collection, new_tag)
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ip_collection, index_type, index_param)
         assert status.OK()
         status = connect.drop_index(ip_collection)
         assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ip_collection
         assert result._index_type == IndexType.FLAT
 
+    @pytest.mark.level(2)
     def test_drop_index_repeatly(self, connect, ip_collection, get_simple_index):
         '''
         target: test drop index repeatly
@@ -1143,38 +1127,38 @@ class TestIndexIP:
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
-        # status, ids = connect.add_vectors(ip_collection, vectors)
+        # status, ids = connect.insert(ip_collection, vectors)
         status, mode = connect._cmd("mode")
         assert status.OK()
-        # status, ids = connect.add_vectors(ip_collection, vectors)
+        # status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ip_collection, index_type, index_param)
         if str(mode) == "GPU" and (index_type == IndexType.IVF_PQ):
             assert not status.OK()
         else:
             assert status.OK()        
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(ip_collection)
         assert status.OK()
         status = connect.drop_index(ip_collection)
         assert status.OK()
-        status, result = connect.describe_index(ip_collection)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ip_collection
         assert result._index_type == IndexType.FLAT
 
-    @pytest.mark.level(2)
-    def test_drop_index_without_connect(self, dis_connect, ip_collection):
-        '''
-        target: test drop index without connection
-        method: drop index, and check if drop successfully
-        expected: raise exception
-        '''
-        nlist = NLIST
-        index_type = IndexType.IVFLAT
-        index_param = {"nlist": nlist}
-        with pytest.raises(Exception) as e:
-            status = dis_connect.drop_index(ip_collection, index_type, index_param)
+    # @pytest.mark.level(2)
+    # def test_drop_index_without_connect(self, dis_connect, ip_collection):
+    #     '''
+    #     target: test drop index without connection
+    #     method: drop index, and check if drop successfully
+    #     expected: raise exception
+    #     '''
+    #     nlist = NLIST
+    #     index_type = IndexType.IVFLAT
+    #     index_param = {"nlist": nlist}
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.drop_index(ip_collection, index_type, index_param)
 
     def test_drop_index_collection_not_create(self, connect, ip_collection):
         '''
@@ -1182,14 +1166,15 @@ class TestIndexIP:
         method: create collection and add vectors in it, create index
         expected: return code not equals to 0, drop index failed
         '''
-        status, ids = connect.add_vectors(ip_collection, vectors)
-        status, result = connect.describe_index(ip_collection)
+        status, ids = connect.insert(ip_collection, vectors)
+        status, result = connect.get_index_info(ip_collection)
         logging.getLogger().info(result)
         # no create index
         status = connect.drop_index(ip_collection)
         logging.getLogger().info(status)
         assert status.OK()
 
+    @pytest.mark.level(2)
     def test_create_drop_index_repeatly(self, connect, ip_collection, get_simple_index):
         '''
         target: test create / drop index repeatly, use the same index params
@@ -1198,15 +1183,15 @@ class TestIndexIP:
         '''
         index_param = get_simple_index["index_param"]
         index_type = get_simple_index["index_type"]
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         for i in range(2):
             status = connect.create_index(ip_collection, index_type, index_param)
             assert status.OK()
-            status, result = connect.describe_index(ip_collection)
+            status, result = connect.get_index_info(ip_collection)
             logging.getLogger().info(result)
             status = connect.drop_index(ip_collection)
             assert status.OK()
-            status, result = connect.describe_index(ip_collection)
+            status, result = connect.get_index_info(ip_collection)
             logging.getLogger().info(result)
             assert result._collection_name == ip_collection
             assert result._index_type == IndexType.FLAT
@@ -1219,19 +1204,19 @@ class TestIndexIP:
         '''
         nlist = NLIST
         indexs = [{"index_type": IndexType.IVFLAT, "index_param": {"nlist": nlist}}, {"index_type": IndexType.IVF_SQ8, "index_param": {"nlist": nlist}}]
-        status, ids = connect.add_vectors(ip_collection, vectors)
+        status, ids = connect.insert(ip_collection, vectors)
         for i in range(2):
             status = connect.create_index(ip_collection, indexs[i]["index_type"], indexs[i]["index_param"])
             assert status.OK()
-            status, result = connect.describe_index(ip_collection)
+            status, result = connect.get_index_info(ip_collection)
             assert result._params == indexs[i]["index_param"]
             assert result._collection_name == ip_collection
             assert result._index_type == indexs[i]["index_type"]
-            status, result = connect.describe_index(ip_collection)
+            status, result = connect.get_index_info(ip_collection)
             logging.getLogger().info(result)
             status = connect.drop_index(ip_collection)
             assert status.OK()
-            status, result = connect.describe_index(ip_collection)
+            status, result = connect.get_index_info(ip_collection)
             logging.getLogger().info(result)
             assert result._collection_name == ip_collection
             assert result._index_type == IndexType.FLAT
@@ -1292,7 +1277,7 @@ class TestIndexJAC:
         index_param = get_jaccard_index["index_param"]
         index_type = get_jaccard_index["index_type"]
         logging.getLogger().info(get_jaccard_index)
-        status, ids = connect.add_vectors(jac_collection, self.vectors)
+        status, ids = connect.insert(jac_collection, self.vectors)
         status = connect.create_index(jac_collection, index_type, index_param)
         if index_type != IndexType.FLAT and index_type != IndexType.IVFLAT:
             assert not status.OK()
@@ -1310,21 +1295,21 @@ class TestIndexJAC:
         index_type = get_jaccard_index["index_type"]
         logging.getLogger().info(get_jaccard_index)
         status = connect.create_partition(jac_collection, tag)
-        status, ids = connect.add_vectors(jac_collection, self.vectors, partition_tag=tag)
+        status, ids = connect.insert(jac_collection, self.vectors, partition_tag=tag)
         status = connect.create_index(jac_collection, index_type, index_param)
         assert status.OK()
 
-    @pytest.mark.level(2)
-    def test_create_index_without_connect(self, dis_connect, jac_collection):
-        '''
-        target: test create index without connection
-        method: create collection and add vectors in it, check if added successfully
-        expected: raise exception
-        '''
-        nlist = NLIST
-        index_param = {"nlist": nlist}
-        with pytest.raises(Exception) as e:
-            status = dis_connect.create_index(jac_collection, IndexType.IVF_SQ8, index_param)
+    # @pytest.mark.level(2)
+    # def test_create_index_without_connect(self, dis_connect, jac_collection):
+    #     '''
+    #     target: test create index without connection
+    #     method: create collection and add vectors in it, check if added successfully
+    #     expected: raise exception
+    #     '''
+    #     nlist = NLIST
+    #     index_param = {"nlist": nlist}
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.create_index(jac_collection, IndexType.IVF_SQ8, index_param)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_index_search_with_query_vectors(self, connect, jac_collection, get_jaccard_index):
@@ -1336,24 +1321,24 @@ class TestIndexJAC:
         index_param = get_jaccard_index["index_param"]
         index_type = get_jaccard_index["index_type"]
         logging.getLogger().info(get_jaccard_index)
-        status, ids = connect.add_vectors(jac_collection, self.vectors)
+        status, ids = connect.insert(jac_collection, self.vectors)
         status = connect.create_index(jac_collection, index_type, index_param)
-        logging.getLogger().info(connect.describe_index(jac_collection))
+        logging.getLogger().info(connect.get_index_info(jac_collection))
         query_vecs = [self.vectors[0], self.vectors[1], self.vectors[2]]
         top_k = 5
         search_param = get_search_param(index_type)
-        status, result = connect.search_vectors(jac_collection, top_k, query_vecs, params=search_param)
+        status, result = connect.search(jac_collection, top_k, query_vecs, params=search_param)
         logging.getLogger().info(result)
         assert status.OK()
         assert len(result) == len(query_vecs)
 
     """
     ******************************************************************
-      The following cases are used to test `describe_index` function
+      The following cases are used to test `get_index_info` function
     ******************************************************************
     """
 
-    def test_describe_index(self, connect, jac_collection, get_jaccard_index):
+    def test_get_index_info(self, connect, jac_collection, get_jaccard_index):
         '''
         target: test describe index interface
         method: create collection and add vectors in it, create index, call describe index
@@ -1362,15 +1347,15 @@ class TestIndexJAC:
         index_param = get_jaccard_index["index_param"]
         index_type = get_jaccard_index["index_type"]
         logging.getLogger().info(get_jaccard_index)
-        # status, ids = connect.add_vectors(jac_collection, vectors[:5000])
+        # status, ids = connect.insert(jac_collection, vectors[:5000])
         status = connect.create_index(jac_collection, index_type, index_param)
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         assert result._collection_name == jac_collection
         assert result._index_type == index_type
         assert result._params == index_param
 
-    def test_describe_index_partition(self, connect, jac_collection, get_jaccard_index):
+    def test_get_index_info_partition(self, connect, jac_collection, get_jaccard_index):
         '''
         target: test describe index interface
         method: create collection, create partition and add vectors in it, create index, call describe index
@@ -1380,9 +1365,9 @@ class TestIndexJAC:
         index_type = get_jaccard_index["index_type"]
         logging.getLogger().info(get_jaccard_index)
         status = connect.create_partition(jac_collection, tag)
-        status, ids = connect.add_vectors(jac_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(jac_collection, vectors, partition_tag=tag)
         status = connect.create_index(jac_collection, index_type, index_param)
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         assert result._params == index_param
         assert result._collection_name == jac_collection
@@ -1404,14 +1389,14 @@ class TestIndexJAC:
         index_type = get_jaccard_index["index_type"]
         status, mode = connect._cmd("mode")
         assert status.OK()
-        # status, ids = connect.add_vectors(ip_collection, vectors)
+        # status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(jac_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(jac_collection)
         assert status.OK()
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         assert result._collection_name == jac_collection
         assert result._index_type == IndexType.FLAT
@@ -1425,14 +1410,14 @@ class TestIndexJAC:
         index_param = get_jaccard_index["index_param"]
         index_type = get_jaccard_index["index_type"]
         status = connect.create_partition(jac_collection, tag)
-        status, ids = connect.add_vectors(jac_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(jac_collection, vectors, partition_tag=tag)
         status = connect.create_index(jac_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(jac_collection)
         assert status.OK()
-        status, result = connect.describe_index(jac_collection)
+        status, result = connect.get_index_info(jac_collection)
         logging.getLogger().info(result)
         assert result._collection_name == jac_collection
         assert result._index_type == IndexType.FLAT
@@ -1513,7 +1498,7 @@ class TestIndexBinary:
         index_param = get_hamming_index["index_param"]
         index_type = get_hamming_index["index_type"]
         logging.getLogger().info(get_hamming_index)
-        status, ids = connect.add_vectors(ham_collection, self.vectors)
+        status, ids = connect.insert(ham_collection, self.vectors)
         status = connect.create_index(ham_collection, index_type, index_param)
         if index_type != IndexType.FLAT and index_type != IndexType.IVFLAT:
             assert not status.OK()
@@ -1531,10 +1516,10 @@ class TestIndexBinary:
         index_type = get_hamming_index["index_type"]
         logging.getLogger().info(get_hamming_index)
         status = connect.create_partition(ham_collection, tag)
-        status, ids = connect.add_vectors(ham_collection, self.vectors, partition_tag=tag)
+        status, ids = connect.insert(ham_collection, self.vectors, partition_tag=tag)
         status = connect.create_index(ham_collection, index_type, index_param)
         assert status.OK()
-        status, res = connect.count_collection(ham_collection)
+        status, res = connect.count_entities(ham_collection)
         assert res == len(self.vectors)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
@@ -1548,23 +1533,23 @@ class TestIndexBinary:
         index_type = get_substructure_index["index_type"]
         logging.getLogger().info(get_substructure_index)
         status = connect.create_partition(substructure_collection, tag)
-        status, ids = connect.add_vectors(substructure_collection, self.vectors, partition_tag=tag)
+        status, ids = connect.insert(substructure_collection, self.vectors, partition_tag=tag)
         status = connect.create_index(substructure_collection, index_type, index_param)
         assert status.OK()
-        status, res = connect.count_collection(substructure_collection,)
+        status, res = connect.count_entities(substructure_collection,)
         assert res == len(self.vectors)
 
-    @pytest.mark.level(2)
-    def test_create_index_without_connect(self, dis_connect, ham_collection):
-        '''
-        target: test create index without connection
-        method: create collection and add vectors in it, check if added successfully
-        expected: raise exception
-        '''
-        nlist = NLIST
-        index_param = {"nlist": nlist}
-        with pytest.raises(Exception) as e:
-            status = dis_connect.create_index(ham_collection, IndexType.IVF_SQ8, index_param)
+    # @pytest.mark.level(2)
+    # def test_create_index_without_connect(self, dis_connect, ham_collection):
+    #     '''
+    #     target: test create index without connection
+    #     method: create collection and add vectors in it, check if added successfully
+    #     expected: raise exception
+    #     '''
+    #     nlist = NLIST
+    #     index_param = {"nlist": nlist}
+    #     with pytest.raises(Exception) as e:
+    #         status = dis_connect.create_index(ham_collection, IndexType.IVF_SQ8, index_param)
 
     @pytest.mark.timeout(BUILD_TIMEOUT)
     def test_create_index_search_with_query_vectors(self, connect, ham_collection, get_hamming_index):
@@ -1576,13 +1561,13 @@ class TestIndexBinary:
         index_param = get_hamming_index["index_param"]
         index_type = get_hamming_index["index_type"]
         logging.getLogger().info(get_hamming_index)
-        status, ids = connect.add_vectors(ham_collection, self.vectors)
+        status, ids = connect.insert(ham_collection, self.vectors)
         status = connect.create_index(ham_collection,  index_type, index_param)
-        logging.getLogger().info(connect.describe_index(ham_collection))
+        logging.getLogger().info(connect.get_index_info(ham_collection))
         query_vecs = [self.vectors[0], self.vectors[1], self.vectors[2]]
         top_k = 5
         search_param = get_search_param(index_type)
-        status, result = connect.search_vectors(ham_collection, top_k, query_vecs, params=search_param)
+        status, result = connect.search(ham_collection, top_k, query_vecs, params=search_param)
         logging.getLogger().info(result)
         assert status.OK()
         assert len(result) == len(query_vecs)
@@ -1597,24 +1582,24 @@ class TestIndexBinary:
         index_param = get_superstructure_index["index_param"]
         index_type = get_superstructure_index["index_type"]
         logging.getLogger().info(get_superstructure_index)
-        status, ids = connect.add_vectors(superstructure_collection, self.vectors)
+        status, ids = connect.insert(superstructure_collection, self.vectors)
         status = connect.create_index(superstructure_collection, index_type, index_param)
-        logging.getLogger().info(connect.describe_index(superstructure_collection))
+        logging.getLogger().info(connect.get_index_info(superstructure_collection))
         query_vecs = [self.vectors[0], self.vectors[1], self.vectors[2]]
         top_k = 5
         search_param = get_search_param(index_type)
-        status, result = connect.search_vectors(superstructure_collection, top_k, query_vecs, params=search_param)
+        status, result = connect.search(superstructure_collection, top_k, query_vecs, params=search_param)
         logging.getLogger().info(result)
         assert status.OK()
         assert len(result) == len(query_vecs)
 
     """
     ******************************************************************
-      The following cases are used to test `describe_index` function
+      The following cases are used to test `get_index_info` function
     ******************************************************************
     """
 
-    def test_describe_index(self, connect, ham_collection, get_hamming_index):
+    def test_get_index_info(self, connect, ham_collection, get_hamming_index):
         '''
         target: test describe index interface
         method: create collection and add vectors in it, create index, call describe index
@@ -1623,15 +1608,15 @@ class TestIndexBinary:
         index_param = get_hamming_index["index_param"]
         index_type = get_hamming_index["index_type"]
         logging.getLogger().info(get_hamming_index)
-        # status, ids = connect.add_vectors(jac_collection, vectors[:5000])
+        # status, ids = connect.insert(jac_collection, vectors[:5000])
         status = connect.create_index(ham_collection, index_type, index_param)
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ham_collection
         assert result._index_type == index_type
         assert result._params == index_param
 
-    def test_describe_index_partition(self, connect, ham_collection, get_hamming_index):
+    def test_get_index_info_partition(self, connect, ham_collection, get_hamming_index):
         '''
         target: test describe index interface
         method: create collection, create partition and add vectors in it, create index, call describe index
@@ -1641,15 +1626,15 @@ class TestIndexBinary:
         index_type = get_hamming_index["index_type"]
         logging.getLogger().info(get_hamming_index)
         status = connect.create_partition(ham_collection, tag)
-        status, ids = connect.add_vectors(ham_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(ham_collection, vectors, partition_tag=tag)
         status = connect.create_index(ham_collection, index_type, index_param)
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         assert result._params == index_param
         assert result._collection_name == ham_collection
         assert result._index_type == index_type
 
-    def test_describe_index_partition_superstructrue(self, connect, superstructure_collection, get_superstructure_index):
+    def test_get_index_info_partition_superstructrue(self, connect, superstructure_collection, get_superstructure_index):
         '''
         target: test describe index interface
         method: create collection, create partition and add vectors in it, create index, call describe index
@@ -1659,9 +1644,9 @@ class TestIndexBinary:
         index_type = get_superstructure_index["index_type"]
         logging.getLogger().info(get_superstructure_index)
         status = connect.create_partition(superstructure_collection, tag)
-        status, ids = connect.add_vectors(superstructure_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(superstructure_collection, vectors, partition_tag=tag)
         status = connect.create_index(superstructure_collection, index_type, index_param)
-        status, result = connect.describe_index(superstructure_collection)
+        status, result = connect.get_index_info(superstructure_collection)
         logging.getLogger().info(result)
         assert result._params == index_param
         assert result._collection_name == superstructure_collection
@@ -1683,14 +1668,14 @@ class TestIndexBinary:
         index_type = get_hamming_index["index_type"]
         status, mode = connect._cmd("mode")
         assert status.OK()
-        # status, ids = connect.add_vectors(ip_collection, vectors)
+        # status, ids = connect.insert(ip_collection, vectors)
         status = connect.create_index(ham_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(ham_collection)
         assert status.OK()
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ham_collection
         assert result._index_type == IndexType.FLAT
@@ -1707,11 +1692,11 @@ class TestIndexBinary:
         assert status.OK()
         status = connect.create_index(substructure_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(substructure_collection)
+        status, result = connect.get_index_info(substructure_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(substructure_collection)
         assert status.OK()
-        status, result = connect.describe_index(substructure_collection)
+        status, result = connect.get_index_info(substructure_collection)
         logging.getLogger().info(result)
         assert result._collection_name == substructure_collection
         assert result._index_type == IndexType.FLAT
@@ -1725,14 +1710,14 @@ class TestIndexBinary:
         index_param = get_hamming_index["index_param"]
         index_type = get_hamming_index["index_type"]
         status = connect.create_partition(ham_collection, tag)
-        status, ids = connect.add_vectors(ham_collection, vectors, partition_tag=tag)
+        status, ids = connect.insert(ham_collection, vectors, partition_tag=tag)
         status = connect.create_index(ham_collection, index_type, index_param)
         assert status.OK()
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         status = connect.drop_index(ham_collection)
         assert status.OK()
-        status, result = connect.describe_index(ham_collection)
+        status, result = connect.get_index_info(ham_collection)
         logging.getLogger().info(result)
         assert result._collection_name == ham_collection
         assert result._index_type == IndexType.FLAT
@@ -1757,9 +1742,9 @@ class TestIndexCollectionInvalid(object):
         assert not status.OK()
 
     @pytest.mark.level(1)
-    def test_describe_index_with_invalid_collectionname(self, connect, get_collection_name):
+    def test_get_index_info_with_invalid_collectionname(self, connect, get_collection_name):
         collection_name = get_collection_name
-        status, result = connect.describe_index(collection_name)
+        status, result = connect.get_index_info(collection_name)
         assert not status.OK()   
 
     @pytest.mark.level(1)
@@ -1785,7 +1770,7 @@ class TestCreateIndexParamsInvalid(object):
         index_param = get_index["index_param"]
         index_type = get_index["index_type"]
         logging.getLogger().info(get_index)
-        # status, ids = connect.add_vectors(collection, vectors)
+        # status, ids = connect.insert(collection, vectors)
         if (not index_type) or (not isinstance(index_type, IndexType)):
             with pytest.raises(Exception) as e:
                 status = connect.create_index(collection, index_type, index_param)
@@ -1804,7 +1789,7 @@ class TestCreateIndexParamsInvalid(object):
         yield request.param
 
     def test_create_index_with_invalid_nlist(self, connect, collection, get_index_type):
-        status, ids = connect.add_vectors(collection, vectors)
+        status, ids = connect.insert(collection, vectors)
         status = connect.create_index(collection, get_index_type, {"nlist": INVALID_NLIST})
         if get_index_type != IndexType.FLAT:
             assert not status.OK()
@@ -1817,8 +1802,84 @@ class TestCreateIndexParamsInvalid(object):
         status = connect.create_index(collection, get_index_type, {})
         if get_index_type != IndexType.FLAT :
             assert not status.OK()
-        status, result = connect.describe_index(collection)
+        status, result = connect.get_index_info(collection)
         logging.getLogger().info(result)
         assert result._collection_name == collection
         assert result._index_type == IndexType.FLAT
+
+class TestIndexAsync:
+    @pytest.fixture(scope="function", autouse=True)
+    def skip_http_check(self, args):
+        if args["handler"] == "HTTP":
+            pytest.skip("skip in http mode")
+
+    """
+    ******************************************************************
+      The following cases are used to test `create_index` function
+    ******************************************************************
+    """
+    @pytest.fixture(
+        scope="function",
+        params=gen_index()
+    )
+    def get_index(self, request, connect):
+        if str(connect._cmd("mode")[1]) == "CPU":
+            if request.param["index_type"] == IndexType.IVF_SQ8H:
+                pytest.skip("sq8h not support in CPU mode")
+        if str(connect._cmd("mode")[1]) == "GPU":
+            if request.param["index_type"] == IndexType.IVF_PQ:
+                pytest.skip("ivfpq not support in GPU mode")
+        return request.param
+
+    @pytest.fixture(
+        scope="function",
+        params=gen_simple_index()
+    )
+    def get_simple_index(self, request, connect):
+        if str(connect._cmd("mode")[1]) == "CPU":
+            if request.param["index_type"] == IndexType.IVF_SQ8H:
+                pytest.skip("sq8h not support in CPU mode")
+        if str(connect._cmd("mode")[1]) == "GPU":
+            # if request.param["index_type"] == IndexType.IVF_PQ:
+            if request.param["index_type"] not in [IndexType.IVF_FLAT]:
+                # pytest.skip("ivfpq not support in GPU mode")
+                pytest.skip("debug ivf_flat in GPU mode")
+        return request.param
+
+    def check_status(self, status):
+        logging.getLogger().info("In callback check status")
+        assert status.OK()
+
+    """
+    ******************************************************************
+      The following cases are used to test `create_index` function
+    ******************************************************************
+    """
+
+    @pytest.mark.timeout(BUILD_TIMEOUT)
+    def test_create_index(self, connect, collection, get_simple_index):
+        '''
+        target: test create index interface
+        method: create collection and add vectors in it, create index
+        expected: return code equals to 0, and search success
+        '''
+        index_param = get_simple_index["index_param"]
+        index_type = get_simple_index["index_type"]
+        logging.getLogger().info(get_simple_index)
+        vectors = gen_vectors(nb, dim)
+        status, ids = connect.insert(collection, vectors)
+        logging.getLogger().info("start index")
+        # future = connect.create_index(collection, index_type, index_param, _async=True, _callback=self.check_status) 
+        future = connect.create_index(collection, index_type, index_param, _async=True) 
+        logging.getLogger().info("before result")
+        status = future.result()
+        assert status.OK()
+
+    def test_create_index_with_invalid_collectionname(self, connect):
+        collection_name = " "
+        nlist = NLIST
+        index_param = {"nlist": nlist}
+        future = connect.create_index(collection_name, IndexType.IVF_SQ8, index_param, _async=True)
+        status = future.result()
+        assert not status.OK()
 

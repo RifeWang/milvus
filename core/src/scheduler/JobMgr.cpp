@@ -11,18 +11,18 @@
 
 #include "scheduler/JobMgr.h"
 
-#include <src/db/Utils.h>
-#include <src/segment/SegmentReader.h>
+#include "src/db/Utils.h"
+#include "src/segment/SegmentReader.h"
 
 #include <limits>
 #include <utility>
 
 #include "SchedInst.h"
 #include "TaskCreator.h"
-#include "optimizer/Optimizer.h"
 #include "scheduler/Algorithm.h"
-#include "scheduler/optimizer/Optimizer.h"
+#include "scheduler/CPUBuilder.h"
 #include "scheduler/tasklabel/SpecResLabel.h"
+#include "selector/Optimizer.h"
 #include "task/Task.h"
 
 namespace milvus {
@@ -68,6 +68,7 @@ JobMgr::Put(const JobPtr& job) {
 
 void
 JobMgr::worker_function() {
+    SetThreadName("jobmgr_thread");
     while (running_) {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait(lock, [this] { return !queue_.empty(); });
@@ -140,7 +141,11 @@ JobMgr::worker_function() {
         if (auto disk = res_mgr_->GetDiskResources()[0].lock()) {
             // if (auto disk = res_mgr_->GetCpuResources()[0].lock()) {
             for (auto& task : tasks) {
-                disk->task_table().Put(task, nullptr);
+                if (task->Type() == TaskType::BuildIndexTask && task->path().Last() == "cpu") {
+                    CPUBuilderInst::GetInstance()->Put(task);
+                } else {
+                    disk->task_table().Put(task, nullptr);
+                }
             }
         }
     }

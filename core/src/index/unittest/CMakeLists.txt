@@ -17,7 +17,7 @@ if (FAISS_WITH_MKL)
             )
 else ()
     set(depend_libs ${depend_libs}
-            ${BLAS_LIBRARIES}
+            ${OpenBLAS_LIBRARIES}
             ${LAPACK_LIBRARIES}
             )
 endif ()
@@ -33,11 +33,12 @@ set(util_srcs
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/helpers/IndexParameter.cpp
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/IndexType.cpp
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/common/Exception.cpp
+        ${INDEX_SOURCE_DIR}/knowhere/knowhere/common/Log.cpp
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/common/Timer.cpp
         ${INDEX_SOURCE_DIR}/unittest/utils.cpp
         )
 
-if (KNOWHERE_GPU_VERSION)
+if (MILVUS_GPU_VERSION)
     include_directories(${CUDA_INCLUDE_DIRS})
     link_directories("${CUDA_TOOLKIT_ROOT_DIR}/lib64")
     set(cuda_lib
@@ -62,7 +63,7 @@ set(faiss_srcs
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/IndexIVFSQ.cpp
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/IndexIVFPQ.cpp
         )
-if (KNOWHERE_GPU_VERSION)
+if (MILVUS_GPU_VERSION)
 set(faiss_srcs ${faiss_srcs}
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/helpers/Cloner.cpp
         ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/gpu/IndexGPUIDMAP.cpp
@@ -88,7 +89,7 @@ endif ()
 target_link_libraries(test_knowhere_common ${depend_libs} ${unittest_libs} ${basic_libs})
 install(TARGETS test_knowhere_common DESTINATION unittest)
 
-if (KNOWHERE_GPU_VERSION)
+if (MILVUS_GPU_VERSION)
 ################################################################################
 #<GPU-RESOURCE-TEST>
 add_executable(test_gpuresource test_gpuresource.cpp ${util_srcs} ${faiss_srcs})
@@ -171,18 +172,20 @@ install(TARGETS test_hnsw DESTINATION unittest)
 
 ################################################################################
 #<SPTAG-TEST>
-set(sptag_srcs
-        ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/adapter/SptagAdapter.cpp
-        ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/helpers/SPTAGParameterMgr.cpp
-        ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/IndexSPTAG.cpp
-        )
-if (NOT TARGET test_sptag)
-    add_executable(test_sptag test_sptag.cpp ${sptag_srcs} ${util_srcs})
+if (MILVUS_SUPPORT_SPTAG)
+    set(sptag_srcs
+            ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/adapter/SptagAdapter.cpp
+            ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/helpers/SPTAGParameterMgr.cpp
+            ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/vector_index/IndexSPTAG.cpp
+            )
+    if (NOT TARGET test_sptag)
+        add_executable(test_sptag test_sptag.cpp ${sptag_srcs} ${util_srcs})
+    endif ()
+    target_link_libraries(test_sptag
+            SPTAGLibStatic
+            ${depend_libs} ${unittest_libs} ${basic_libs})
+    install(TARGETS test_sptag DESTINATION unittest)
 endif ()
-target_link_libraries(test_sptag
-        SPTAGLibStatic
-        ${depend_libs} ${unittest_libs} ${basic_libs})
-install(TARGETS test_sptag DESTINATION unittest)
 
 ################################################################################
 #<ANNOY-TEST>
@@ -198,4 +201,4 @@ install(TARGETS test_annoy DESTINATION unittest)
 
 #add_subdirectory(faiss_ori)
 #add_subdirectory(faiss_benchmark)
-
+#add_subdirectory(metric_alg_benchmark)

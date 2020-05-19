@@ -11,8 +11,6 @@
 
 #pragma once
 
-#include <segment/SegmentWriter.h>
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +19,7 @@
 #include "db/engine/ExecutionEngine.h"
 #include "db/insert/VectorSource.h"
 #include "db/meta/Meta.h"
+#include "segment/SegmentWriter.h"
 #include "utils/Status.h"
 
 namespace milvus {
@@ -35,6 +34,9 @@ class MemTableFile : public server::CacheConfigHandler {
  public:
     Status
     Add(const VectorSourcePtr& source);
+
+    Status
+    AddEntities(const VectorSourcePtr& source);
 
     Status
     Delete(segment::doc_id_t doc_id);

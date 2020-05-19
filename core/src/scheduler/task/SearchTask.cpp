@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include "db/Utils.h"
@@ -57,7 +58,7 @@ static constexpr size_t PARALLEL_REDUCE_BATCH = 1000;
 //    if (thread_count > 0) {
 //        reduce_batch = max_index / thread_count + 1;
 //    }
-//    ENGINE_LOG_DEBUG << "use " << thread_count <<
+//    LOG_ENGINE_DEBUG_ << "use " << thread_count <<
 //                     " thread parallelly do reduce, each thread process " << reduce_batch << " vectors";
 //
 //    std::vector<std::shared_ptr<std::thread> > thread_array;
@@ -123,6 +124,21 @@ XSearchTask::XSearchTask(const std::shared_ptr<server::Context>& context, Segmen
         if (!file_->index_params_.empty()) {
             json_params = milvus::json::parse(file_->index_params_);
         }
+        //        if (auto job = job_.lock()) {
+        //            auto search_job = std::static_pointer_cast<scheduler::SearchJob>(job);
+        //            query::GeneralQueryPtr general_query = search_job->general_query();
+        //            if (general_query != nullptr) {
+        //                std::unordered_map<std::string, engine::DataType> types;
+        //                auto attr_type = search_job->attr_type();
+        //                auto type_it = attr_type.begin();
+        //                for (; type_it != attr_type.end(); type_it++) {
+        //                    types.insert(std::make_pair(type_it->first, (engine::DataType)(type_it->second)));
+        //                }
+        //                index_engine_ =
+        //                    EngineFactory::Build(file_->dimension_, file_->location_, engine_type,
+        //                                         (MetricType)file_->metric_type_, types, json_params);
+        //            }
+        //        }
         index_engine_ = EngineFactory::Build(file_->dimension_, file_->location_, engine_type,
                                              (MetricType)file_->metric_type_, json_params);
     }
@@ -159,7 +175,7 @@ XSearchTask::Load(LoadType type, uint8_t device_id) {
     } catch (std::exception& ex) {
         // typical error: out of disk space or permition denied
         error_msg = "Failed to load index file: " + std::string(ex.what());
-        ENGINE_LOG_ERROR << LogOut("[%s][%ld] Encounter execption: %s", "search", 0, error_msg.c_str());
+        LOG_ENGINE_ERROR_ << LogOut("[%s][%ld] Encounter execption: %s", "search", 0, error_msg.c_str());
         stat = Status(SERVER_UNEXPECTED_ERROR, error_msg);
     }
     fiu_do_on("XSearchTask.Load.out_of_memory", stat = Status(SERVER_UNEXPECTED_ERROR, "out of memory"));
@@ -202,7 +218,7 @@ void
 XSearchTask::Execute() {
     milvus::server::ContextFollower tracer(context_, "XSearchTask::Execute " + std::to_string(index_id_));
 
-    //    ENGINE_LOG_DEBUG << "Searching in file id:" << index_id_ << " with "
+    //    LOG_ENGINE_DEBUG_ << "Searching in file id:" << index_id_ << " with "
     //                     << search_contexts_.size() << " tasks";
 
     //    TimeRecorder rc("DoSearch file id:" + std::to_string(index_id_));
@@ -222,8 +238,11 @@ XSearchTask::Execute() {
         }
 
         // step 1: allocate memory
+        query::GeneralQueryPtr general_query = search_job->general_query();
+
         uint64_t nq = search_job->nq();
         uint64_t topk = search_job->topk();
+
         const milvus::json& extra_params = search_job->extra_params();
         const engine::VectorsData& vectors = search_job->vectors();
 
@@ -241,14 +260,51 @@ XSearchTask::Execute() {
                 hybrid = true;
             }
             Status s;
+            if (general_query != nullptr) {
+                std::unordered_map<std::string, engine::DataType> types;
+                auto attr_type = search_job->attr_type();
+                auto type_it = attr_type.begin();
+                for (; type_it != attr_type.end(); type_it++) {
+                    types.insert(std::make_pair(type_it->first, (engine::DataType)(type_it->second)));
+                }
+                faiss::ConcurrentBitsetPtr bitset;
+                s = index_engine_->ExecBinaryQuery(general_query, bitset, types, nq, topk, output_distance, output_ids);
+
+                if (!s.ok()) {
+                    search_job->GetStatus() = s;
+                    search_job->SearchDone(index_id_);
+                    return;
+                }
+
+                auto spec_k = file_->row_count_ < topk ? file_->row_count_ : topk;
+                if (spec_k == 0) {
+                    LOG_ENGINE_WARNING_ << "Searching in an empty file. file location = " << file_->location_;
+                }
+
+                {
+                    std::unique_lock<std::mutex> lock(search_job->mutex());
+
+                    if (search_job->GetResultIds().size() > spec_k) {
+                        if (search_job->GetResultIds().front() == -1) {
+                            // initialized results set
+                            search_job->GetResultIds().resize(spec_k * nq);
+                            search_job->GetResultDistances().resize(spec_k * nq);
+                        }
+                    }
+
+                    search_job->vector_count() = nq;
+                    XSearchTask::MergeTopkToResultSet(output_ids, output_distance, spec_k, nq, topk, ascending_reduce,
+                                                      search_job->GetResultIds(), search_job->GetResultDistances());
+                }
+                search_job->SearchDone(index_id_);
+                index_engine_ = nullptr;
+                return;
+            }
             if (!vectors.float_data_.empty()) {
                 s = index_engine_->Search(nq, vectors.float_data_.data(), topk, extra_params, output_distance.data(),
                                           output_ids.data(), hybrid);
             } else if (!vectors.binary_data_.empty()) {
                 s = index_engine_->Search(nq, vectors.binary_data_.data(), topk, extra_params, output_distance.data(),
-                                          output_ids.data(), hybrid);
-            } else if (!vectors.id_array_.empty()) {
-                s = index_engine_->Search(nq, vectors.id_array_, topk, extra_params, output_distance.data(),
                                           output_ids.data(), hybrid);
             }
 
@@ -266,8 +322,8 @@ XSearchTask::Execute() {
             // step 3: pick up topk result
             auto spec_k = file_->row_count_ < topk ? file_->row_count_ : topk;
             if (spec_k == 0) {
-                ENGINE_LOG_WARNING << LogOut("[%s][%ld] Searching in an empty file. file location = %s", "search", 0,
-                                             file_->location_.c_str());
+                LOG_ENGINE_WARNING_ << LogOut("[%s][%ld] Searching in an empty file. file location = %s", "search", 0,
+                                              file_->location_.c_str());
             }
 
             {
@@ -288,7 +344,7 @@ XSearchTask::Execute() {
             span = rc.RecordSection(hdr + ", reduce topk");
             //            search_job->AccumReduceCost(span);
         } catch (std::exception& ex) {
-            ENGINE_LOG_ERROR << LogOut("[%s][%ld] SearchTask encounter exception: %s", "search", 0, ex.what());
+            LOG_ENGINE_ERROR_ << LogOut("[%s][%ld] SearchTask encounter exception: %s", "search", 0, ex.what());
             //            search_job->IndexSearchDone(index_id_);//mark as done avoid dead lock, even search failed
         }
 
@@ -307,7 +363,7 @@ XSearchTask::MergeTopkToResultSet(const scheduler::ResultIds& src_ids, const sch
                                   size_t src_k, size_t nq, size_t topk, bool ascending, scheduler::ResultIds& tar_ids,
                                   scheduler::ResultDistances& tar_distances) {
     if (src_ids.empty()) {
-        ENGINE_LOG_DEBUG << LogOut("[%s][%d] Search result is empty.", "search", 0);
+        LOG_ENGINE_DEBUG_ << LogOut("[%s][%d] Search result is empty.", "search", 0);
         return;
     }
 

@@ -140,7 +140,7 @@ Utils::BuildEntities(int64_t from, int64_t to, std::vector<milvus::Entity>& enti
         milvus::Entity entity;
         entity.float_data.resize(dimension);
         for (int64_t i = 0; i < dimension; i++) {
-            entity.float_data[i] = (float)(k % (i + 1));
+            entity.float_data[i] = (float)((k + 100) % (i + 1));
         }
 
         entity_array.emplace_back(entity);
@@ -213,7 +213,7 @@ Utils::DoSearch(std::shared_ptr<milvus::Connection> conn, const std::string& col
     {
         BLOCK_SPLITER
         JSON json_params = {{"nprobe", nprobe}};
-        milvus_sdk::TimeRecorder rc("search");
+        milvus_sdk::TimeRecorder rc("Search");
         milvus::Status stat =
             conn->Search(collection_name,
                          partition_tags,
@@ -229,24 +229,65 @@ Utils::DoSearch(std::shared_ptr<milvus::Connection> conn, const std::string& col
     CheckSearchResult(entity_array, topk_query_result);
 }
 
-void
-PrintPartitionStat(const milvus::PartitionStat& partition_stat) {
-    std::cout << "\tPartition " << partition_stat.tag << " entity count: " << partition_stat.row_count << std::endl;
-    for (auto& seg_stat : partition_stat.segments_stat) {
-        std::cout << "\t\tsegment " << seg_stat.segment_name << " entity count: " << seg_stat.row_count
-                  << " index: " << seg_stat.index_name << " data size: " << seg_stat.data_size << std::endl;
+void ConstructVector(uint64_t nq, uint64_t dimension, std::vector<milvus::Entity>& query_vector) {
+    query_vector.resize(nq);
+    for (uint64_t i = 0; i < nq; ++i) {
+        query_vector[i].float_data.resize(dimension);
+        for (uint64_t j = 0; j < dimension; ++j) {
+            query_vector[i].float_data[j] = (float)((i + 100) / (j + 1));
+        }
     }
 }
 
-void
-Utils::PrintCollectionInfo(const milvus::CollectionInfo& info) {
-    BLOCK_SPLITER
-    std::cout << "Collection " << " total entity count: " << info.total_row_count << std::endl;
-    for (const milvus::PartitionStat& partition_stat : info.partitions_stat) {
-        PrintPartitionStat(partition_stat);
+std::vector<milvus::LeafQueryPtr>
+Utils::GenLeafQuery() {
+    //Construct TermQuery
+    uint64_t row_num = 1000;
+    std::vector<int64_t> field_value;
+    field_value.resize(row_num);
+    for (uint64_t i = 0; i < row_num; ++i) {
+        field_value[i] = i;
     }
+    std::vector<int8_t> term_value(row_num * sizeof(int64_t));
+    memcpy(term_value.data(), field_value.data(), row_num * sizeof(int64_t));
+    milvus::TermQueryPtr tq = std::make_shared<milvus::TermQuery>();
+    tq->field_name = "field_1";
+    tq->field_value = term_value;
 
-    BLOCK_SPLITER
+    //Construct RangeQuery
+    milvus::CompareExpr ce1 = {milvus::CompareOperator::LTE, "10000"}, ce2 = {milvus::CompareOperator::GTE, "1"};
+    std::vector<milvus::CompareExpr> ces{ce1, ce2};
+    milvus::RangeQueryPtr rq = std::make_shared<milvus::RangeQuery>();
+    rq->field_name = "field_2";
+    rq->compare_expr = ces;
+
+    //Construct VectorQuery
+    uint64_t NQ = 10;
+    uint64_t DIMENSION = 128;
+    uint64_t NPROBE = 32;
+    milvus::VectorQueryPtr vq = std::make_shared<milvus::VectorQuery>();
+    ConstructVector(NQ, DIMENSION, vq->query_vector);
+    vq->field_name = "field_3";
+    vq->topk = 10;
+    JSON json_params = {{"nprobe", NPROBE}};
+    vq->extra_params = json_params.dump();
+
+
+    std::vector<milvus::LeafQueryPtr> lq;
+    milvus::LeafQueryPtr lq1 = std::make_shared<milvus::LeafQuery>();
+    milvus::LeafQueryPtr lq2 = std::make_shared<milvus::LeafQuery>();
+    milvus::LeafQueryPtr lq3 = std::make_shared<milvus::LeafQuery>();
+    lq.emplace_back(lq1);
+    lq.emplace_back(lq2);
+    lq.emplace_back(lq3);
+    lq1->term_query_ptr = tq;
+    lq2->range_query_ptr = rq;
+    lq3->vector_query_ptr = vq;
+
+    lq1->query_boost = 1.0;
+    lq2->query_boost = 2.0;
+    lq3->query_boost = 3.0;
+    return lq;
 }
 
 }  // namespace milvus_sdk

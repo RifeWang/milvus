@@ -25,6 +25,9 @@ namespace meta {
 auto
 StoragePrototype(const std::string& path);
 
+auto
+CollectionPrototype(const std::string& path);
+
 class SqliteMetaImpl : public Meta {
  public:
     explicit SqliteMetaImpl(const DBMetaOptions& options);
@@ -37,7 +40,7 @@ class SqliteMetaImpl : public Meta {
     DescribeCollection(CollectionSchema& collection_schema) override;
 
     Status
-    HasCollection(const std::string& collection_id, bool& has_or_not) override;
+    HasCollection(const std::string& collection_id, bool& has_or_not, bool is_root = false) override;
 
     Status
     AllCollections(std::vector<CollectionSchema>& collection_schema_array) override;
@@ -53,10 +56,10 @@ class SqliteMetaImpl : public Meta {
 
     Status
     GetCollectionFiles(const std::string& collection_id, const std::vector<size_t>& ids,
-                       SegmentsSchema& collection_files) override;
+                       FilesHolder& files_holder) override;
 
     Status
-    GetCollectionFilesBySegmentId(const std::string& segment_id, SegmentsSchema& collection_files) override;
+    GetCollectionFilesBySegmentId(const std::string& segment_id, FilesHolder& files_holder) override;
 
     Status
     UpdateCollectionIndex(const std::string& collection_id, const CollectionIndex& index) override;
@@ -93,6 +96,9 @@ class SqliteMetaImpl : public Meta {
                     uint64_t lsn) override;
 
     Status
+    HasPartition(const std::string& collection_id, const std::string& tag, bool& has_or_not) override;
+
+    Status
     DropPartition(const std::string& partition_name) override;
 
     Status
@@ -103,19 +109,20 @@ class SqliteMetaImpl : public Meta {
     GetPartitionName(const std::string& collection_id, const std::string& tag, std::string& partition_name) override;
 
     Status
-    FilesToSearch(const std::string& collection_id, SegmentsSchema& files) override;
+    FilesToSearch(const std::string& collection_id, FilesHolder& files_holder) override;
 
     Status
-    FilesToMerge(const std::string& collection_id, SegmentsSchema& files) override;
+    FilesToMerge(const std::string& collection_id, FilesHolder& files_holder) override;
 
     Status
-    FilesToIndex(SegmentsSchema&) override;
+    FilesToIndex(FilesHolder& files_holder) override;
 
     Status
-    FilesByType(const std::string& collection_id, const std::vector<int>& file_types, SegmentsSchema& files) override;
+    FilesByType(const std::string& collection_id, const std::vector<int>& file_types,
+                FilesHolder& files_holder) override;
 
     Status
-    FilesByID(const std::vector<size_t>& ids, SegmentsSchema& files) override;
+    FilesByID(const std::vector<size_t>& ids, FilesHolder& files_holder) override;
 
     Status
     Size(uint64_t& result) override;
@@ -140,6 +147,15 @@ class SqliteMetaImpl : public Meta {
 
     Status
     GetGlobalLastLSN(uint64_t& lsn) override;
+
+    Status
+    CreateHybridCollection(CollectionSchema& collection_schema, hybrid::FieldsSchema& fields_schema) override;
+
+    Status
+    DescribeHybridCollection(CollectionSchema& collection_schema, hybrid::FieldsSchema& fields_schema) override;
+
+    Status
+    CreateHybridCollectionFile(SegmentSchema& file_schema) override;
 
  private:
     Status

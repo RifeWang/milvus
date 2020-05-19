@@ -16,7 +16,7 @@
 #include "grpc/gen-milvus/milvus.grpc.pb.h"
 #include "grpc/gen-status/status.grpc.pb.h"
 #include "grpc/gen-status/status.pb.h"
-#include "server/context/Context.h"
+#include "query/GeneralQuery.h"
 #include "utils/Json.h"
 #include "utils/Status.h"
 
@@ -68,6 +68,13 @@ struct TopKQueryResult {
     }
 };
 
+struct HybridQueryResult {
+    int64_t row_num_;
+    engine::ResultIds id_list_;
+    engine::ResultDistances distance_list_;
+    engine::Entity entities_;
+};
+
 struct IndexParam {
     std::string collection_name_;
     int64_t index_type_;
@@ -95,23 +102,7 @@ struct PartitionParam {
     }
 };
 
-struct SegmentStat {
-    std::string name_;
-    int64_t row_num_ = 0;
-    std::string index_name_;
-    int64_t data_size_ = 0;
-};
-
-struct PartitionStat {
-    std::string tag_;
-    int64_t total_row_num_ = 0;
-    std::vector<SegmentStat> segments_stat_;
-};
-
-struct CollectionInfo {
-    int64_t total_row_num_ = 0;
-    std::vector<PartitionStat> partitions_stat_;
-};
+class Context;
 
 class BaseRequest {
  public:
@@ -126,6 +117,7 @@ class BaseRequest {
         kDeleteByID,
         kGetVectorByID,
         kGetVectorIDs,
+        kInsertEntity,
 
         // collection operations
         kShowCollections = 300,
@@ -136,6 +128,9 @@ class BaseRequest {
         kShowCollectionInfo,
         kDropCollection,
         kPreloadCollection,
+        kCreateHybridCollection,
+        kHasHybridCollection,
+        kDescribeHybridCollection,
 
         // partition operations
         kCreatePartition = 400,
@@ -151,6 +146,7 @@ class BaseRequest {
         kSearchByID = 600,
         kSearch,
         kSearchCombine,
+        kHybridSearch,
     };
 
  protected:

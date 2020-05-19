@@ -8,6 +8,7 @@ on:
       - 'ci/**'
       - 'core/**'
       - '.github/workflows/core.yml'
+      - docker-compose.yml
       - '!**.md'
       - '!ci/jenkins/**'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'ci/**'
       - 'core/**'
       - '.github/workflows/core.yml'
+      - docker-compose.yml
       - '!**.md'
       - '!ci/jenkins/**'
 
@@ -47,6 +49,7 @@ jobs:
         shell: bash
         run: |
           docker-compose build ubuntu-core
+          docker rmi $(docker images | grep '<none>' | awk '{print $3}') || exit 0
       - name: Docker Run
         run: |
           docker-compose run --use-aliases -d db
@@ -94,6 +97,7 @@ jobs:
         shell: bash
         run: |
           docker-compose build centos-core
+          docker rmi $(docker images | grep '<none>' | awk '{print $3}') || exit 0
       - name: Docker Run
         run: |
           docker-compose run --use-aliases -d db

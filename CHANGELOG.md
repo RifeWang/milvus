@@ -2,7 +2,87 @@
 
 Please mark all change in change log and use the issue from GitHub
 
-# Milvus 0.8.0 (TBD)
+# Milvus 0.10.0 (TBD)
+
+## Bug
+
+## Feature
+
+## Improvement
+-   \#2307 Disable index SPTAG by default
+
+## Task
+
+# Milvus 0.9.0 (2020-05-15)
+
+## Bug
+-   \#1705 Limit the insert data batch size
+-   \#1776 Error out when index SQ8H run in CPU mode
+-   \#1925 To flush all collections, flush cannot work
+-   \#1929 Skip MySQL meta schema field width check
+-   \#1946 Fix load index file CPU2GPU fail during searching
+-   \#1955 Switch create_index operation to background once client break connection
+-   \#1997 Index file missed after compact
+-   \#2002 Remove log error msg `Attributes is null`
+-   \#2073 Fix CheckDBConfigBackendUrl error message
+-   \#2076 CheckMetricConfigAddress error message
+-   \#2120 Fix Search expected failed if search params set invalid
+-   \#2121 Allow regex match partition tag when search
+-   \#2128 Check has_partition params
+-   \#2131 Distance/ID returned is not correct if searching with duplicate ids
+-   \#2141 Fix server start failed if wal directory exist
+-   \#2169 Fix SingleIndexTest.IVFSQHybrid unittest
+-   \#2194 Fix get collection info failed
+-   \#2196 Fix server start failed if wal is disabled
+-   \#2203 0.8.0 id=-1 is returned when total count < topk
+-   \#2228 Fix show partitions failed in http module
+-   \#2231 Use server_config to define hard-delete delay time for segment files
+-   \#2261 Re-define result returned by has_collection if collection in delete state
+-   \#2264 Milvus opened too many files when the metric_config.enable_monitor=true
+-   \#2266 Server hang when using multi-clients to query different collections
+-   \#2280 has_partition should return true for `_default`
+
+## Feature
+-   \#1751 Add api SearchByID
+-   \#1752 Add api GetVectorsByID
+-   \#1962 Add api HasPartition
+-   \#1965 FAISS/NSG/HNSW/ANNOY use unified distance calculation algorithm
+-   \#2054 Check if CPU instruction sets are illegal
+-   \#2057 Add a config parameter to switch off http server
+-   \#2059 Add lock file avoid multiple instances modifying data at the same time
+-   \#2064 Warn when use SQLite as metadata management
+-   \#2111 Check GPU environment before start server
+-   \#2206 Log file rotating
+-   \#2240 Obtain running rpc requests information
+-   \#2268 Intelligently detect openblas library in system to avoid installing from source code every time
+-   \#2283 Suspend the building tasks when any query comand arrives.
+
+## Improvement
+-   \#221 Refactor LOG macro
+-   \#833 Catch exception in RolloutHandler and output in stderr
+-   \#1796 Compile Openblas with source code to improve the performance
+-   \#1942 Background merge file strategy
+-   \#2039 Support Milvus run on SSE CPUs
+-   \#2149 Merge server_cpu_config.template and server_gpu_config.template
+-   \#2153 Upgrade thirdparty oatpp to v1.0.0
+-   \#2167 Merge log_config.conf with server_config.yaml
+-   \#2173 Check storage permission
+-   \#2178 Using elkan K-Means to improve IVF
+-   \#2185 Change id to string format in http module
+-   \#2186 Update endpoints in http module
+-   \#2190 Fix memory usage is twice of index size when using GPU searching
+-   \#2248 Use hostname and port as instance label of metrics
+-   \#2252 Upgrade mishards APIs and requirements
+-   \#2256 k-means clustering algorithm use only Euclidean distance metric
+-   \#2300 Upgrade mishrads configuration to version 0.4
+-   \#2311 Update mishards methods 
+-   \#2330 Change url for behavior 'get_entities_by_id'
+-   \#2347 Update http document for v0.9.0
+-   \#2358 Upgrade mishards for v0.9.0 
+
+## Task
+
+# Milvus 0.8.0 (2020-04-15)
 
 ## Bug
 -   \#1276 SQLite throw exception after create 50000+ partitions in a table
@@ -11,6 +91,10 @@ Please mark all change in change log and use the issue from GitHub
 -   \#1832 Fix crash in tracing module
 -   \#1873 Fix index file serialize to incorrect path
 -   \#1881 Fix bad alloc when index files lost
+-   \#1883 Fix inserted vectors becomes all zero when index_file_size >= 2GB
+-   \#1901 Search failed with flat index
+-   \#1903 Fix invalid annoy result
+-   \#1910 C++ SDK GetIDsInSegment could not work for large dataset
 
 ## Feature
 -   \#261  Integrate ANNOY into Milvus
@@ -29,9 +113,11 @@ Please mark all change in change log and use the issue from GitHub
 -   \#1885 Optimize knowhere unittest
 -   \#1886 Refactor log on search and insert request
 -   \#1897 Heap pop and push can be realized by heap_swap_top
+-   \#1921 Use TimeRecorder instead of chrono
+-   \#1928 Fix too many data and uid copies when loading files
+-   \#1930 Upgrade mishards to v0.8.0
 
 ## Task
-
 
 # Milvus 0.7.1 (2020-03-29)
 
@@ -266,7 +352,7 @@ Please mark all change in change log and use the issue from GitHub
 ## Improvement
 -   \#255 Add ivfsq8 test report detailed version
 -   \#260 C++ SDK README
--   \#266 Rpc request source code refactor
+-   \#266 RPC request source code refactor
 -   \#274 Logger the time cost during preloading data
 -   \#275 Rename C++ SDK IndexType
 -   \#284 Change C++ SDK to shared library
@@ -682,7 +768,7 @@ Please mark all change in change log and use the issue from GitHub
 -   MS-34 Fix prometheus-cpp thirdparty
 -   MS-67 Fix license check bug
 -   MS-76 Fix pipeline crash bug
--   MS-100 cmake: fix AWS build issue
+-   MS-100 CMake: fix AWS build issue
 -   MS-101 Change AWS build type to Release
 
 ## Improvement
@@ -696,14 +782,14 @@ Please mark all change in change log and use the issue from GitHub
 -   MS-16 Implement metrics without prometheus
 -   MS-21 Implement SDK interface part 2
 -   MS-26 CMake. Add thirdparty packages
--   MS-31 cmake: add prometheus
--   MS-33 cmake: add -j4 to make third party packages build faster
+-   MS-31 CMake: add prometheus
+-   MS-33 CMake: add -j4 to make third party packages build faster
 -   MS-27 Support gpu config and disable license build config in cmake
 -   MS-47 Add query vps metrics
 -   MS-37 Add query, cache usage, disk write speed and file data size metrics
 -   MS-30 Use faiss v1.5.2
--   MS-54 cmake: Change Thrift third party URL to github.com
--   MS-69 prometheus: add all proposed metrics
+-   MS-54 CMake: Change Thrift third party URL to github.com
+-   MS-69 Prometheus: add all proposed metrics
 
 ## Task
 

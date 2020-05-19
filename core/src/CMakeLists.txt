@@ -37,6 +37,7 @@ aux_source_directory(${MILVUS_ENGINE_SRC}/db db_main_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/engine db_engine_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/insert db_insert_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/meta db_meta_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/db/merge db_merge_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/wal db_wal_files)
 
 set(grpc_service_files
@@ -46,11 +47,15 @@ set(grpc_service_files
         ${MILVUS_ENGINE_SRC}/grpc/gen-status/status.pb.cc
         )
 
+aux_source_directory(${MILVUS_ENGINE_SRC}/query query_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/context context_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/search search_files)
+
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler scheduler_main_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/action scheduler_action_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/event scheduler_event_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/job scheduler_job_files)
-aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/optimizer scheduler_optimizer_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/selector scheduler_selector_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/resource scheduler_resource_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/scheduler/task scheduler_task_files)
 set(scheduler_files
@@ -58,7 +63,7 @@ set(scheduler_files
         ${scheduler_action_files}
         ${scheduler_event_files}
         ${scheduler_job_files}
-        ${scheduler_optimizer_files}
+        ${scheduler_selector_files}
         ${scheduler_resource_files}
         ${scheduler_task_files}
         )
@@ -73,12 +78,17 @@ set(thirdparty_files
         )
 
 aux_source_directory(${MILVUS_ENGINE_SRC}/server server_service_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/server/init server_init_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/request delivery_request_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/hybrid_request delivery_hybrid_request_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery/strategy delivery_strategy_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/server/delivery delivery_files)
 set(server_files
+        ${server_init_files}
         ${server_service_files}
+        ${server_init_files}
         ${delivery_request_files}
+        ${delivery_hybrid_request_files}
         ${delivery_strategy_files}
         ${delivery_files}
         )
@@ -134,6 +144,7 @@ set(engine_files
         ${db_engine_files}
         ${db_insert_files}
         ${db_meta_files}
+        ${db_merge_files}
         ${db_wal_files}
         ${metrics_files}
         ${storage_files}
@@ -203,7 +214,14 @@ if (MILVUS_GPU_VERSION)
             )
 endif ()
 
-if (MILVUS_ENABLE_PROFILING)
+# cannot be enabled together with ENABLE_CPU_PROFILING
+if (ENABLE_MEM_PROFILING)
+    set(third_party_libs ${third_party_libs}
+            tcmalloc
+            )
+endif ()
+
+if (ENABLE_CPU_PROFILING)
     set(third_party_libs ${third_party_libs}
             gperftools
             libunwind
@@ -239,6 +257,7 @@ if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
 endif ()
 
 add_library(milvus_engine STATIC ${engine_files})
+add_dependencies(milvus_engine fiu)
 target_link_libraries(milvus_engine
         knowhere
         ${third_party_libs}
@@ -250,6 +269,7 @@ if (MILVUS_WITH_PROMETHEUS)
 else ()
     add_library(metrics STATIC ${metrics_files})
 endif ()
+add_dependencies(metrics fiu)
 
 set(metrics_lib
         yaml-cpp
@@ -264,6 +284,7 @@ endif ()
 target_link_libraries(metrics ${metrics_lib})
 
 add_library(tracing STATIC ${tracing_files} ${thirdparty_files})
+add_dependencies(tracing fiu)
 set(tracing_lib
         opentracing
         opentracing_mocktracer
@@ -284,6 +305,9 @@ add_executable(milvus_server
         ${config_files}
         ${config_handler_files}
         ${metrics_files}
+        ${query_files}
+        ${search_files}
+        ${context_files}
         ${scheduler_files}
         ${server_files}
         ${grpc_server_files}
@@ -308,3 +332,11 @@ install(FILES
         ${CMAKE_BINARY_DIR}/fiu_ep-prefix/src/fiu_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}fiu${CMAKE_SHARED_LIBRARY_SUFFIX}.0
         ${CMAKE_BINARY_DIR}/fiu_ep-prefix/src/fiu_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}fiu${CMAKE_SHARED_LIBRARY_SUFFIX}.1.00
         DESTINATION lib)
+
+if(EXISTS ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/)
+    install(FILES
+            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}
+            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0
+            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0.3
+            DESTINATION lib)
+endif()

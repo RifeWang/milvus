@@ -19,14 +19,17 @@
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 #include "SegmentReader.h"
 #include "Vectors.h"
 #include "codecs/default/DefaultCodec.h"
+#include "db/Utils.h"
 #include "storage/disk/DiskIOReader.h"
 #include "storage/disk/DiskIOWriter.h"
 #include "storage/disk/DiskOperation.h"
 #include "utils/Log.h"
+#include "utils/TimeRecorder.h"
 
 namespace milvus {
 namespace segment {
@@ -50,6 +53,36 @@ SegmentWriter::AddVectors(const std::string& name, const std::vector<uint8_t>& d
 }
 
 Status
+SegmentWriter::AddVectors(const std::string& name, const uint8_t* data, uint64_t size,
+                          const std::vector<doc_id_t>& uids) {
+    segment_ptr_->vectors_ptr_->AddData(data, size);
+    segment_ptr_->vectors_ptr_->AddUids(uids);
+    segment_ptr_->vectors_ptr_->SetName(name);
+
+    return Status::OK();
+}
+
+Status
+SegmentWriter::AddAttrs(const std::string& name, const std::unordered_map<std::string, uint64_t>& attr_nbytes,
+                        const std::unordered_map<std::string, std::vector<uint8_t>>& attr_data,
+                        const std::vector<doc_id_t>& uids) {
+    auto attr_data_it = attr_data.begin();
+    auto attrs = segment_ptr_->attrs_ptr_->attrs;
+    for (; attr_data_it != attr_data.end(); ++attr_data_it) {
+        if (attrs.find(attr_data_it->first) != attrs.end()) {
+            segment_ptr_->attrs_ptr_->attrs.at(attr_data_it->first)
+                ->AddAttr(attr_data_it->second, attr_nbytes.at(attr_data_it->first));
+            segment_ptr_->attrs_ptr_->attrs.at(attr_data_it->first)->AddUids(uids);
+        } else {
+            AttrPtr attr = std::make_shared<Attr>(attr_data_it->second, attr_nbytes.at(attr_data_it->first), uids,
+                                                  attr_data_it->first);
+            segment_ptr_->attrs_ptr_->attrs.insert(std::make_pair(attr_data_it->first, attr));
+        }
+    }
+    return Status::OK();
+}
+
+Status
 SegmentWriter::SetVectorIndex(const milvus::knowhere::VecIndexPtr& index) {
     segment_ptr_->vector_index_ptr_->SetVectorIndex(index);
     return Status::OK();
@@ -57,39 +90,33 @@ SegmentWriter::SetVectorIndex(const milvus::knowhere::VecIndexPtr& index) {
 
 Status
 SegmentWriter::Serialize() {
-    auto start = std::chrono::high_resolution_clock::now();
+    TimeRecorder recorder("SegmentWriter::Serialize");
 
     auto status = WriteBloomFilter();
     if (!status.ok()) {
-        ENGINE_LOG_ERROR << status.message();
+        LOG_ENGINE_ERROR_ << status.message();
         return status;
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end - start;
-    ENGINE_LOG_DEBUG << "Writing bloom filter took " << diff.count() << " s in total";
+    recorder.RecordSection("Writing bloom filter done");
 
-    start = std::chrono::high_resolution_clock::now();
-
-    ENGINE_LOG_DEBUG << "Write vectors";
     status = WriteVectors();
     if (!status.ok()) {
-        ENGINE_LOG_ERROR << "Write vectors fail: " << status.message();
+        LOG_ENGINE_ERROR_ << "Write vectors fail: " << status.message();
         return status;
     }
 
-    end = std::chrono::high_resolution_clock::now();
-    diff = end - start;
-    ENGINE_LOG_DEBUG << "Writing vectors and uids took " << diff.count() << " s in total";
+    status = WriteAttrs();
+    if (!status.ok()) {
+        return status;
+    }
 
-    start = std::chrono::high_resolution_clock::now();
+    recorder.RecordSection("Writing vectors and uids done");
 
     // Write an empty deleted doc
     status = WriteDeletedDocs();
 
-    end = std::chrono::high_resolution_clock::now();
-    diff = end - start;
-    ENGINE_LOG_DEBUG << "Writing deleted docs took " << diff.count() << " s";
+    recorder.RecordSection("Writing deleted docs done");
 
     return status;
 }
@@ -102,7 +129,25 @@ SegmentWriter::WriteVectors() {
         default_codec.GetVectorsFormat()->write(fs_ptr_, segment_ptr_->vectors_ptr_);
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write vectors: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
+        return Status(SERVER_WRITE_ERROR, err_msg);
+    }
+    return Status::OK();
+}
+
+Status
+SegmentWriter::WriteAttrs() {
+    codec::DefaultCodec default_codec;
+    try {
+        fs_ptr_->operation_ptr_->CreateDirectory();
+        default_codec.GetAttrsFormat()->write(fs_ptr_, segment_ptr_->attrs_ptr_);
+    } catch (std::exception& e) {
+        std::string err_msg = "Failed to write vectors: " + std::string(e.what());
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -110,13 +155,19 @@ SegmentWriter::WriteVectors() {
 
 Status
 SegmentWriter::WriteVectorIndex(const std::string& location) {
+    if (location.empty()) {
+        return Status(SERVER_WRITE_ERROR, "Invalid parameter of WriteVectorIndex");
+    }
+
     codec::DefaultCodec default_codec;
     try {
         fs_ptr_->operation_ptr_->CreateDirectory();
         default_codec.GetVectorIndexFormat()->write(fs_ptr_, location, segment_ptr_->vector_index_ptr_);
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write vector index: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -128,35 +179,27 @@ SegmentWriter::WriteBloomFilter() {
     try {
         fs_ptr_->operation_ptr_->CreateDirectory();
 
-        auto start = std::chrono::high_resolution_clock::now();
+        TimeRecorder recorder("SegmentWriter::WriteBloomFilter");
 
         default_codec.GetIdBloomFilterFormat()->create(fs_ptr_, segment_ptr_->id_bloom_filter_ptr_);
 
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> diff = end - start;
-        ENGINE_LOG_DEBUG << "Initializing bloom filter took " << diff.count() << " s";
-
-        start = std::chrono::high_resolution_clock::now();
+        recorder.RecordSection("Initializing bloom filter");
 
         auto& uids = segment_ptr_->vectors_ptr_->GetUids();
         for (auto& uid : uids) {
             segment_ptr_->id_bloom_filter_ptr_->Add(uid);
         }
 
-        end = std::chrono::high_resolution_clock::now();
-        diff = end - start;
-        ENGINE_LOG_DEBUG << "Adding " << uids.size() << " ids to bloom filter took " << diff.count() << " s";
-
-        start = std::chrono::high_resolution_clock::now();
+        recorder.RecordSection("Adding " + std::to_string(uids.size()) + " ids to bloom filter");
 
         default_codec.GetIdBloomFilterFormat()->write(fs_ptr_, segment_ptr_->id_bloom_filter_ptr_);
 
-        end = std::chrono::high_resolution_clock::now();
-        diff = end - start;
-        ENGINE_LOG_DEBUG << "Writing bloom filter took " << diff.count() << " s";
+        recorder.RecordSection("Writing bloom filter");
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write vectors: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -171,7 +214,9 @@ SegmentWriter::WriteDeletedDocs() {
         default_codec.GetDeletedDocsFormat()->write(fs_ptr_, deleted_docs_ptr);
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write deleted docs: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -185,7 +230,9 @@ SegmentWriter::WriteDeletedDocs(const DeletedDocsPtr& deleted_docs) {
         default_codec.GetDeletedDocsFormat()->write(fs_ptr_, deleted_docs);
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write deleted docs: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -199,7 +246,9 @@ SegmentWriter::WriteBloomFilter(const IdBloomFilterPtr& id_bloom_filter_ptr) {
         default_codec.GetIdBloomFilterFormat()->write(fs_ptr_, id_bloom_filter_ptr);
     } catch (std::exception& e) {
         std::string err_msg = "Failed to write bloom filter: " + std::string(e.what());
-        ENGINE_LOG_ERROR << err_msg;
+        LOG_ENGINE_ERROR_ << err_msg;
+
+        engine::utils::SendExitSignal();
         return Status(SERVER_WRITE_ERROR, err_msg);
     }
     return Status::OK();
@@ -223,9 +272,9 @@ SegmentWriter::Merge(const std::string& dir_to_merge, const std::string& name) {
         return Status(DB_ERROR, "Cannot Merge Self");
     }
 
-    ENGINE_LOG_DEBUG << "Merging from " << dir_to_merge << " to " << fs_ptr_->operation_ptr_->GetDirectory();
+    LOG_ENGINE_DEBUG_ << "Merging from " << dir_to_merge << " to " << fs_ptr_->operation_ptr_->GetDirectory();
 
-    auto start = std::chrono::high_resolution_clock::now();
+    TimeRecorder recorder("SegmentWriter::Merge");
 
     SegmentReader segment_reader_to_merge(dir_to_merge);
     bool in_cache;
@@ -234,7 +283,7 @@ SegmentWriter::Merge(const std::string& dir_to_merge, const std::string& name) {
         status = segment_reader_to_merge.Load();
         if (!status.ok()) {
             std::string msg = "Failed to load segment from " + dir_to_merge;
-            ENGINE_LOG_ERROR << msg;
+            LOG_ENGINE_ERROR_ << msg;
             return Status(DB_ERROR, msg);
         }
     }
@@ -242,9 +291,7 @@ SegmentWriter::Merge(const std::string& dir_to_merge, const std::string& name) {
     segment_reader_to_merge.GetSegment(segment_to_merge);
     auto& uids = segment_to_merge->vectors_ptr_->GetUids();
 
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end - start;
-    ENGINE_LOG_DEBUG << "Loading segment took " << diff.count() << " s";
+    recorder.RecordSection("Loading segment");
 
     if (segment_to_merge->deleted_docs_ptr_ != nullptr) {
         auto offsets_to_delete = segment_to_merge->deleted_docs_ptr_->GetDeletedDocs();
@@ -253,16 +300,30 @@ SegmentWriter::Merge(const std::string& dir_to_merge, const std::string& name) {
         segment_to_merge->vectors_ptr_->Erase(offsets_to_delete);
     }
 
-    start = std::chrono::high_resolution_clock::now();
+    recorder.RecordSection("erase");
 
     AddVectors(name, segment_to_merge->vectors_ptr_->GetData(), segment_to_merge->vectors_ptr_->GetUids());
 
-    end = std::chrono::high_resolution_clock::now();
-    diff = end - start;
-    ENGINE_LOG_DEBUG << "Adding " << segment_to_merge->vectors_ptr_->GetCount() << " vectors and uids took "
-                     << diff.count() << " s";
+    auto rows = segment_to_merge->vectors_ptr_->GetCount();
+    recorder.RecordSection("Adding " + std::to_string(rows) + " vectors and uids");
 
-    ENGINE_LOG_DEBUG << "Merging completed from " << dir_to_merge << " to " << fs_ptr_->operation_ptr_->GetDirectory();
+    std::unordered_map<std::string, uint64_t> attr_nbytes;
+    std::unordered_map<std::string, std::vector<uint8_t>> attr_data;
+    auto attr_it = segment_to_merge->attrs_ptr_->attrs.begin();
+    for (; attr_it != segment_to_merge->attrs_ptr_->attrs.end(); attr_it++) {
+        attr_nbytes.insert(std::make_pair(attr_it->first, attr_it->second->GetNbytes()));
+        attr_data.insert(std::make_pair(attr_it->first, attr_it->second->GetData()));
+
+        if (segment_to_merge->deleted_docs_ptr_ != nullptr) {
+            auto offsets_to_delete = segment_to_merge->deleted_docs_ptr_->GetDeletedDocs();
+
+            // Erase from field data
+            attr_it->second->Erase(offsets_to_delete);
+        }
+    }
+    AddAttrs(name, attr_nbytes, attr_data, segment_to_merge->vectors_ptr_->GetUids());
+
+    LOG_ENGINE_DEBUG_ << "Merging completed from " << dir_to_merge << " to " << fs_ptr_->operation_ptr_->GetDirectory();
 
     return Status::OK();
 }

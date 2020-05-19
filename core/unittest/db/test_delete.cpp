@@ -125,7 +125,7 @@ TEST_F(DeleteTest, delete_in_mem) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_, collection_info.collection_id_, tags, topk,
-                {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          {{"nprobe", nprobe}}, search, result_ids, result_distances);
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
         ASSERT_GT(result_distances[0], 1);
@@ -194,7 +194,13 @@ TEST_F(DeleteTest, delete_on_disk) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_,
-                collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          collection_info.collection_id_,
+                          tags,
+                          topk,
+                          {{"nprobe", nprobe}},
+                          search,
+                          result_ids,
+                          result_distances);
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
         ASSERT_GT(result_distances[0], 1);
@@ -257,7 +263,13 @@ TEST_F(DeleteTest, delete_multiple_times) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_,
-                collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          collection_info.collection_id_,
+                          tags,
+                          topk,
+                          {{"nprobe", nprobe}},
+                          search,
+                          result_ids,
+                          result_distances);
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
         ASSERT_GT(result_distances[0], 1);
@@ -317,7 +329,7 @@ TEST_F(DeleteTest, delete_before_create_index) {
     milvus::engine::CollectionIndex index;
     index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFSQ8;
     index.extra_params_ = {{"nlist", 100}};
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     uint64_t row_count;
@@ -333,7 +345,13 @@ TEST_F(DeleteTest, delete_before_create_index) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_,
-                collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          collection_info.collection_id_,
+                          tags,
+                          topk,
+                          {{"nprobe", nprobe}},
+                          search,
+                          result_ids,
+                          result_distances);
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
         ASSERT_GT(result_distances[0], 1);
@@ -381,7 +399,7 @@ TEST_F(DeleteTest, delete_with_index) {
     milvus::engine::CollectionIndex index;
     index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFSQ8;
     index.extra_params_ = {{"nlist", 100}};
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     //    std::this_thread::sleep_for(std::chrono::seconds(3));  // ensure raw data write to disk
@@ -410,7 +428,13 @@ TEST_F(DeleteTest, delete_with_index) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_,
-                collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          collection_info.collection_id_,
+                          tags,
+                          topk,
+                          {{"nprobe", nprobe}},
+                          search,
+                          result_ids,
+                          result_distances);
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
         ASSERT_GT(result_distances[0], 1);
@@ -461,7 +485,7 @@ TEST_F(DeleteTest, delete_multiple_times_with_index) {
     milvus::engine::CollectionIndex index;
     index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFFLAT;
     index.extra_params_ = {{"nlist", 1}};
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     int topk = 10, nprobe = 10;
@@ -487,7 +511,13 @@ TEST_F(DeleteTest, delete_multiple_times_with_index) {
         milvus::engine::ResultIds result_ids;
         milvus::engine::ResultDistances result_distances;
         stat = db_->Query(dummy_context_,
-                collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}}, search, result_ids, result_distances);
+                          collection_info.collection_id_,
+                          tags,
+                          topk,
+                          {{"nprobe", nprobe}},
+                          search,
+                          result_ids,
+                          result_distances);
         ASSERT_TRUE(stat.ok());
         ASSERT_NE(result_ids[0], pair.first);
         //        ASSERT_LT(result_distances[0], 1e-4);
@@ -534,7 +564,7 @@ TEST_F(DeleteTest, delete_single_vector) {
     milvus::engine::ResultIds result_ids;
     milvus::engine::ResultDistances result_distances;
     stat = db_->Query(dummy_context_,
-            collection_info.collection_id_, tags, topk, json_params, xb, result_ids, result_distances);
+                      collection_info.collection_id_, tags, topk, json_params, xb, result_ids, result_distances);
     ASSERT_TRUE(result_ids.empty());
     ASSERT_TRUE(result_distances.empty());
     // ASSERT_EQ(result_ids[0], -1);
@@ -564,7 +594,7 @@ TEST_F(DeleteTest, delete_add_create_index) {
     milvus::engine::CollectionIndex index;
     index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFFLAT;
     index.extra_params_ = {{"nlist", 100}};
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     std::vector<milvus::engine::IDNumber> ids_to_delete;
@@ -580,7 +610,7 @@ TEST_F(DeleteTest, delete_add_create_index) {
 
     // stat = db_->Flush();
     // ASSERT_TRUE(stat.ok());
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     uint64_t row_count;
@@ -599,15 +629,15 @@ TEST_F(DeleteTest, delete_add_create_index) {
     qb.vector_count_ = 1;
     qb.id_array_.clear();
     stat = db_->Query(dummy_context_,
-            collection_info.collection_id_, tags, topk, json_params, qb, result_ids, result_distances);
+                      collection_info.collection_id_, tags, topk, json_params, qb, result_ids, result_distances);
 
     ASSERT_EQ(result_ids[0], xb2.id_array_.front());
     ASSERT_LT(result_distances[0], 1e-4);
 
     result_ids.clear();
     result_distances.clear();
-    stat = db_->QueryByID(dummy_context_, collection_info.collection_id_, tags, topk,
-                          json_params, ids_to_delete.front(), result_ids, result_distances);
+    stat = db_->QueryByIDs(dummy_context_, collection_info.collection_id_, tags, topk,
+                           json_params, ids_to_delete, result_ids, result_distances);
     ASSERT_EQ(result_ids[0], -1);
     ASSERT_EQ(result_distances[0], std::numeric_limits<float>::max());
 }
@@ -635,7 +665,7 @@ TEST_F(DeleteTest, delete_add_auto_flush) {
     // ASSERT_TRUE(stat.ok());
     // milvus::engine::CollectionIndex index;
     // index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFSQ8;
-    // stat = db_->CreateIndex(collection_info.collection_id_, index);
+    // stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     // ASSERT_TRUE(stat.ok());
 
     std::vector<milvus::engine::IDNumber> ids_to_delete;
@@ -652,7 +682,7 @@ TEST_F(DeleteTest, delete_add_auto_flush) {
     std::this_thread::sleep_for(std::chrono::seconds(2));
     // stat = db_->Flush();
     // ASSERT_TRUE(stat.ok());
-    // stat = db_->CreateIndex(collection_info.collection_id_, index);
+    // stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     // ASSERT_TRUE(stat.ok());
 
     uint64_t row_count;
@@ -671,16 +701,16 @@ TEST_F(DeleteTest, delete_add_auto_flush) {
     qb.vector_count_ = 1;
     qb.id_array_.clear();
     stat = db_->Query(dummy_context_,
-            collection_info.collection_id_, tags, topk, json_params, qb, result_ids, result_distances);
+                      collection_info.collection_id_, tags, topk, json_params, qb, result_ids, result_distances);
 
     ASSERT_EQ(result_ids[0], xb2.id_array_.front());
     ASSERT_LT(result_distances[0], 1e-4);
 
     result_ids.clear();
     result_distances.clear();
-    stat = db_->QueryByID(dummy_context_,
-            collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}},
-            ids_to_delete.front(), result_ids, result_distances);
+    stat = db_->QueryByIDs(dummy_context_,
+                           collection_info.collection_id_, tags, topk, {{"nprobe", nprobe}},
+                           ids_to_delete, result_ids, result_distances);
     ASSERT_EQ(result_ids[0], -1);
     ASSERT_EQ(result_distances[0], std::numeric_limits<float>::max());
 }
@@ -730,17 +760,21 @@ TEST_F(CompactTest, compact_basic) {
     milvus::engine::ResultDistances result_distances;
     milvus::engine::VectorsData qb = xb;
 
-    for (auto& id : ids_to_delete) {
-        stat = db_->QueryByID(dummy_context_, collection_info.collection_id_, tags, topk, json_params, id, result_ids,
-                              result_distances);
-        ASSERT_EQ(result_ids[0], -1);
-        ASSERT_EQ(result_distances[0], std::numeric_limits<float>::max());
-    }
+    stat = db_->QueryByIDs(dummy_context_,
+                           collection_info.collection_id_,
+                           tags,
+                           topk,
+                           json_params,
+                           ids_to_delete,
+                           result_ids,
+                           result_distances);
+    ASSERT_EQ(result_ids[0], -1);
+    ASSERT_EQ(result_distances[0], std::numeric_limits<float>::max());
 }
 
 TEST_F(CompactTest, compact_with_index) {
     milvus::engine::meta::CollectionSchema collection_info = BuildCollectionSchema();
-    collection_info.index_file_size_ = milvus::engine::ONE_KB;
+    collection_info.index_file_size_ = milvus::engine::KB;
     collection_info.engine_type_ = (int32_t)milvus::engine::EngineType::FAISS_IVFSQ8;
     auto stat = db_->CreateCollection(collection_info);
 
@@ -780,7 +814,7 @@ TEST_F(CompactTest, compact_with_index) {
 
     milvus::engine::CollectionIndex index;
     index.engine_type_ = (int)milvus::engine::EngineType::FAISS_IVFSQ8;
-    stat = db_->CreateIndex(collection_info.collection_id_, index);
+    stat = db_->CreateIndex(dummy_context_, collection_info.collection_id_, index);
     ASSERT_TRUE(stat.ok());
 
     stat = db_->Flush();

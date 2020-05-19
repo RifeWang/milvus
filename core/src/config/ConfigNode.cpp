@@ -142,9 +142,8 @@ ConfigNode::GetChild(const std::string& type_name) {
 void
 ConfigNode::GetChildren(ConfigNodeArr& arr) const {
     arr.clear();
-    for (auto ref : children_) {
-        arr.push_back(ref.second);
-    }
+    arr.reserve(children_.size());
+    transform(children_.begin(), children_.end(), back_inserter(arr), [](auto& ref) { return ref.second; });
 }
 
 const std::map<std::string, ConfigNode>&
@@ -187,18 +186,18 @@ ConfigNode::ClearSequences() {
 void
 ConfigNode::PrintAll(const std::string& prefix) const {
     for (auto& elem : config_) {
-        SERVER_LOG_INFO << prefix << elem.first + ": " << elem.second;
+        LOG_SERVER_INFO_ << prefix << elem.first + ": " << elem.second;
     }
 
     for (auto& elem : sequences_) {
-        SERVER_LOG_INFO << prefix << elem.first << ": ";
+        LOG_SERVER_INFO_ << prefix << elem.first << ": ";
         for (auto& str : elem.second) {
-            SERVER_LOG_INFO << prefix << "    - " << str;
+            LOG_SERVER_INFO_ << prefix << "    - " << str;
         }
     }
 
     for (auto& elem : children_) {
-        SERVER_LOG_INFO << prefix << elem.first << ": ";
+        LOG_SERVER_INFO_ << prefix << elem.first << ": ";
         elem.second.PrintAll(prefix + "    ");
     }
 }

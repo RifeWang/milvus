@@ -90,7 +90,7 @@ if (MILVUS_VERSION_MAJOR STREQUAL ""
         OR MILVUS_VERSION_MINOR STREQUAL ""
         OR MILVUS_VERSION_PATCH STREQUAL "")
     message(WARNING "Failed to determine Milvus version from git branch name")
-    set(MILVUS_VERSION "0.8.0")
+    set(MILVUS_VERSION "0.9.0")
 endif ()
 
 message(STATUS "Build version = ${MILVUS_VERSION}")
@@ -167,9 +167,9 @@ if (MILVUS_WITH_PROMETHEUS)
     add_compile_definitions("MILVUS_WITH_PROMETHEUS")
 endif ()
 
-message("MILVUS_ENABLE_PROFILING = ${MILVUS_ENABLE_PROFILING}")
-if (MILVUS_ENABLE_PROFILING STREQUAL "ON")
-    ADD_DEFINITIONS(-DMILVUS_ENABLE_PROFILING)
+message("ENABLE_CPU_PROFILING = ${ENABLE_CPU_PROFILING}")
+if (ENABLE_CPU_PROFILING STREQUAL "ON")
+    ADD_DEFINITIONS(-DENABLE_CPU_PROFILING)
 endif()
 
 if (MILVUS_WITH_FIU)
@@ -206,12 +206,16 @@ if ("${MILVUS_DB_PATH}" STREQUAL "")
 endif ()
 
 if (MILVUS_GPU_VERSION)
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf/server_gpu_config.template ${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.yaml)
+    set(GPU_ENABLE "true")
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.template 
+        ${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.yaml
+        @ONLY)
 else ()
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf/server_cpu_config.template ${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.yaml)
+    set(GPU_ENABLE "false")
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.template 
+        ${CMAKE_CURRENT_SOURCE_DIR}/conf/server_config.yaml
+        @ONLY)
 endif ()
-
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf/log_config.template ${CMAKE_CURRENT_SOURCE_DIR}/conf/log_config.conf)
 
 install(DIRECTORY scripts/
         DESTINATION scripts
@@ -226,7 +230,6 @@ install(DIRECTORY scripts/migration
         WORLD_EXECUTE WORLD_READ)
 install(FILES
         conf/server_config.yaml
-        conf/log_config.conf
         DESTINATION
         conf)
 

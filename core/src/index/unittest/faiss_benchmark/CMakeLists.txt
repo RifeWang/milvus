@@ -1,4 +1,4 @@
-if (KNOWHERE_GPU_VERSION)
+if (MILVUS_GPU_VERSION)
 
     include_directories(${INDEX_SOURCE_DIR}/thirdparty)
     include_directories(${INDEX_SOURCE_DIR}/include)
@@ -24,7 +24,7 @@ if (KNOWHERE_GPU_VERSION)
                 )
     else ()
         set(depend_libs ${depend_libs}
-                ${BLAS_LIBRARIES}
+                ${OpenBLAS_LIBRARIES}
                 ${LAPACK_LIBRARIES}
                 )
     endif ()

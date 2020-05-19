@@ -64,12 +64,26 @@ DBWrapper::StartService() {
 
     StringHelpFunctions::SplitStringByDelimeter(db_slave_path, ";", opt.meta_.slave_paths_);
 
+    s = config.GetStorageConfigFileCleanupTimeup(opt.file_cleanup_timeout_);
+    if (!s.ok()) {
+        std::cerr << s.ToString() << std::endl;
+        return s;
+    }
+
     // cache config
     s = config.GetCacheConfigCacheInsertData(opt.insert_cache_immediately_);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
     }
+
+    int64_t insert_buffer_size = 1 * engine::GB;
+    s = config.GetCacheConfigInsertBufferSize(insert_buffer_size);
+    if (!s.ok()) {
+        std::cerr << s.ToString() << std::endl;
+        return s;
+    }
+    opt.insert_buffer_size_ = insert_buffer_size * engine::GB;
 
     std::string mode;
     s = config.GetServerConfigDeployMode(mode);
@@ -131,7 +145,7 @@ DBWrapper::StartService() {
 
     if (omp_thread > 0) {
         omp_set_num_threads(omp_thread);
-        SERVER_LOG_DEBUG << "Specify openmp thread number: " << omp_thread;
+        LOG_SERVER_DEBUG_ << "Specify openmp thread number: " << omp_thread;
     } else {
         int64_t sys_thread_cnt = 8;
         if (CommonUtil::GetSystemAvailableThreads(sys_thread_cnt)) {
@@ -197,7 +211,7 @@ DBWrapper::StartService() {
         db_ = engine::DBFactory::Build(opt);
     } catch (std::exception& ex) {
         std::cerr << "Error: failed to open database: " << ex.what()
-                  << ". Possible reason: Meta Tables schema is damaged "
+                  << ". Possible reason: out of storage, meta schema is damaged "
                   << "or created by in-compatible Milvus version." << std::endl;
         kill(0, SIGUSR1);
     }

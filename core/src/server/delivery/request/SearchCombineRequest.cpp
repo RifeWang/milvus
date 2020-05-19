@@ -233,8 +233,8 @@ Status
 SearchCombineRequest::OnExecute() {
     try {
         size_t combined_request = request_list_.size();
-        SERVER_LOG_DEBUG << "SearchCombineRequest execute, request count=" << combined_request
-                         << ", extra_params=" << extra_params_.dump();
+        LOG_SERVER_DEBUG_ << "SearchCombineRequest execute, request count=" << combined_request
+                          << ", extra_params=" << extra_params_.dump();
         std::string hdr = "SearchCombineRequest(collection=" + collection_name_ + ")";
 
         TimeRecorderAuto rc(hdr);
@@ -309,12 +309,12 @@ SearchCombineRequest::OnExecute() {
 
         // all requests are skipped
         if (request_list_.empty()) {
-            SERVER_LOG_DEBUG << "all combined requests were skipped";
+            LOG_SERVER_DEBUG_ << "all combined requests were skipped";
             return Status::OK();
         }
 
-        SERVER_LOG_DEBUG << (combined_request - run_request) << " requests were skipped";
-        SERVER_LOG_DEBUG << "reset topk to " << search_topk_;
+        LOG_SERVER_DEBUG_ << (combined_request - run_request) << " requests were skipped";
+        LOG_SERVER_DEBUG_ << "reset topk to " << search_topk_;
         rc.RecordSection("check validation");
 
         // step 3: construct vectors_data
@@ -348,7 +348,7 @@ SearchCombineRequest::OnExecute() {
             }
         }
 
-        SERVER_LOG_DEBUG << total_count << " query vectors combined";
+        LOG_SERVER_DEBUG_ << total_count << " query vectors combined";
         rc.RecordSection("combined query vectors");
 
         // step 4: search vectors
@@ -379,6 +379,22 @@ SearchCombineRequest::OnExecute() {
         }
         if (result_ids.empty()) {
             status = Status(DB_ERROR, "no result returned for combined request");
+            // let all request return
+            FreeRequests(status);
+            return status;
+        }
+
+        // avoid memcpy crash, check id count = target vector count * topk
+        if (result_ids.size() != total_count * search_topk_) {
+            status = Status(DB_ERROR, "Result count doesn't match target vectors count");
+            // let all request return
+            FreeRequests(status);
+            return status;
+        }
+
+        // avoid memcpy crash, check distance count = id count
+        if (result_distances.size() != result_ids.size()) {
+            status = Status(DB_ERROR, "Result distance and id count doesn't match");
             // let all request return
             FreeRequests(status);
             return status;

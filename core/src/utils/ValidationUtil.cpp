@@ -21,7 +21,9 @@
 #include <arpa/inet.h>
 
 #ifdef MILVUS_GPU_VERSION
+
 #include <cuda_runtime.h>
+
 #endif
 
 #include <fiu-local.h>
@@ -38,6 +40,8 @@ namespace {
 constexpr size_t COLLECTION_NAME_SIZE_LIMIT = 255;
 constexpr int64_t COLLECTION_DIMENSION_LIMIT = 32768;
 constexpr int32_t INDEX_FILE_SIZE_LIMIT = 4096;  // index trigger size max = 4096 MB
+constexpr int64_t M_BYTE = 1024 * 1024;
+constexpr int64_t MAX_INSERT_DATA_SIZE = 256 * M_BYTE;
 
 Status
 CheckParameterRange(const milvus::json& json_params, const std::string& param_name, int64_t min, int64_t max,
@@ -45,7 +49,7 @@ CheckParameterRange(const milvus::json& json_params, const std::string& param_na
     if (json_params.find(param_name) == json_params.end()) {
         std::string msg = "Parameter list must contain: ";
         msg += param_name;
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
@@ -57,13 +61,13 @@ CheckParameterRange(const milvus::json& json_params, const std::string& param_na
             std::string msg = "Invalid " + param_name + " value: " + std::to_string(value) + ". Valid range is " +
                               (min_close ? "[" : "(") + std::to_string(min) + ", " + std::to_string(max) +
                               (max_closed ? "]" : ")");
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_ARGUMENT, msg);
         }
     } catch (std::exception& e) {
         std::string msg = "Invalid " + param_name + ": ";
         msg += e.what();
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
@@ -75,7 +79,7 @@ CheckParameterExistence(const milvus::json& json_params, const std::string& para
     if (json_params.find(param_name) == json_params.end()) {
         std::string msg = "Parameter list must contain: ";
         msg += param_name;
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
@@ -83,13 +87,13 @@ CheckParameterExistence(const milvus::json& json_params, const std::string& para
         int64_t value = json_params[param_name];
         if (value < 0) {
             std::string msg = "Invalid " + param_name + " value: " + std::to_string(value);
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_ARGUMENT, msg);
         }
     } catch (std::exception& e) {
         std::string msg = "Invalid " + param_name + ": ";
         msg += e.what();
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 
@@ -103,7 +107,7 @@ ValidationUtil::ValidateCollectionName(const std::string& collection_name) {
     // Collection name shouldn't be empty.
     if (collection_name.empty()) {
         std::string msg = "Collection name should not be empty.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -111,7 +115,7 @@ ValidationUtil::ValidateCollectionName(const std::string& collection_name) {
     // Collection name size shouldn't exceed 16384.
     if (collection_name.size() > COLLECTION_NAME_SIZE_LIMIT) {
         std::string msg = invalid_msg + "The length of a collection name must be less than 255 characters.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -119,7 +123,7 @@ ValidationUtil::ValidateCollectionName(const std::string& collection_name) {
     char first_char = collection_name[0];
     if (first_char != '_' && std::isalpha(first_char) == 0) {
         std::string msg = invalid_msg + "The first character of a collection name must be an underscore or letter.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -128,7 +132,7 @@ ValidationUtil::ValidateCollectionName(const std::string& collection_name) {
         char name_char = collection_name[i];
         if (name_char != '_' && std::isalnum(name_char) == 0) {
             std::string msg = invalid_msg + "Collection name can only contain numbers, letters, and underscores.";
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_COLLECTION_NAME, msg);
         }
     }
@@ -142,7 +146,7 @@ ValidationUtil::ValidateTableDimension(int64_t dimension, int64_t metric_type) {
         std::string msg = "Invalid collection dimension: " + std::to_string(dimension) + ". " +
                           "The collection dimension must be within the range of 1 ~ " +
                           std::to_string(COLLECTION_DIMENSION_LIMIT) + ".";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_VECTOR_DIMENSION, msg);
     }
 
@@ -150,7 +154,7 @@ ValidationUtil::ValidateTableDimension(int64_t dimension, int64_t metric_type) {
         if ((dimension % 8) != 0) {
             std::string msg = "Invalid collection dimension: " + std::to_string(dimension) + ". " +
                               "The collection dimension must be a multiple of 8";
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_VECTOR_DIMENSION, msg);
         }
     }
@@ -164,7 +168,7 @@ ValidationUtil::ValidateCollectionIndexType(int32_t index_type) {
     if (engine_type <= 0 || engine_type > static_cast<int>(engine::EngineType::MAX_VALUE)) {
         std::string msg = "Invalid index type: " + std::to_string(index_type) + ". " +
                           "Make sure the index type is in IndexType list.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_INDEX_TYPE, msg);
     }
 
@@ -172,7 +176,7 @@ ValidationUtil::ValidateCollectionIndexType(int32_t index_type) {
     // special case, hybird index only available in customize faiss library
     if (engine_type == static_cast<int>(engine::EngineType::FAISS_IVFSQ8H)) {
         std::string msg = "Unsupported index type: " + std::to_string(index_type);
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_INDEX_TYPE, msg);
     }
 #endif
@@ -182,7 +186,7 @@ ValidationUtil::ValidateCollectionIndexType(int32_t index_type) {
 
 Status
 ValidationUtil::ValidateIndexParams(const milvus::json& index_params,
-                                    const engine::meta::CollectionSchema& table_schema, int32_t index_type) {
+                                    const engine::meta::CollectionSchema& collection_schema, int32_t index_type) {
     switch (index_type) {
         case (int32_t)engine::EngineType::FAISS_IDMAP:
         case (int32_t)engine::EngineType::FAISS_BIN_IDMAP: {
@@ -211,11 +215,11 @@ ValidationUtil::ValidateIndexParams(const milvus::json& index_params,
 
             // special check for 'm' parameter
             std::vector<int64_t> resset;
-            milvus::knowhere::IVFPQConfAdapter::GetValidMList(table_schema.dimension_, resset);
+            milvus::knowhere::IVFPQConfAdapter::GetValidMList(collection_schema.dimension_, resset);
             int64_t m_value = index_params[index_params, knowhere::IndexParams::m];
             if (resset.empty()) {
                 std::string msg = "Invalid collection dimension, unable to get reasonable values for 'm'";
-                SERVER_LOG_ERROR << msg;
+                LOG_SERVER_ERROR_ << msg;
                 return Status(SERVER_INVALID_COLLECTION_DIMENSION, msg);
             }
 
@@ -230,7 +234,7 @@ ValidationUtil::ValidateIndexParams(const milvus::json& index_params,
                     msg += std::to_string(resset[i]);
                 }
 
-                SERVER_LOG_ERROR << msg;
+                LOG_SERVER_ERROR_ << msg;
                 return Status(SERVER_INVALID_ARGUMENT, msg);
             }
 
@@ -279,8 +283,8 @@ ValidationUtil::ValidateIndexParams(const milvus::json& index_params,
 
 Status
 ValidationUtil::ValidateSearchParams(const milvus::json& search_params,
-                                     const engine::meta::CollectionSchema& table_schema, int64_t topk) {
-    switch (table_schema.engine_type_) {
+                                     const engine::meta::CollectionSchema& collection_schema, int64_t topk) {
+    switch (collection_schema.engine_type_) {
         case (int32_t)engine::EngineType::FAISS_IDMAP:
         case (int32_t)engine::EngineType::FAISS_BIN_IDMAP: {
             break;
@@ -324,21 +328,21 @@ ValidationUtil::ValidateSearchParams(const milvus::json& search_params,
 
 Status
 ValidationUtil::ValidateVectorData(const engine::VectorsData& vectors,
-                                   const engine::meta::CollectionSchema& table_schema) {
+                                   const engine::meta::CollectionSchema& collection_schema) {
     uint64_t vector_count = vectors.vector_count_;
     if ((vectors.float_data_.empty() && vectors.binary_data_.empty()) || vector_count == 0) {
         return Status(SERVER_INVALID_ROWRECORD_ARRAY,
                       "The vector array is empty. Make sure you have entered vector records.");
     }
 
-    if (engine::utils::IsBinaryMetricType(table_schema.metric_type_)) {
+    if (engine::utils::IsBinaryMetricType(collection_schema.metric_type_)) {
         // check prepared binary data
         if (vectors.binary_data_.size() % vector_count != 0) {
             return Status(SERVER_INVALID_ROWRECORD_ARRAY,
                           "The vector dimension must be equal to the collection dimension.");
         }
 
-        if (vectors.binary_data_.size() * 8 / vector_count != table_schema.dimension_) {
+        if (vectors.binary_data_.size() * 8 / vector_count != collection_schema.dimension_) {
             return Status(SERVER_INVALID_VECTOR_DIMENSION,
                           "The vector dimension must be equal to the collection dimension.");
         }
@@ -349,9 +353,28 @@ ValidationUtil::ValidateVectorData(const engine::VectorsData& vectors,
             return Status(SERVER_INVALID_ROWRECORD_ARRAY,
                           "The vector dimension must be equal to the collection dimension.");
         }
-        if (vectors.float_data_.size() / vector_count != table_schema.dimension_) {
+        if (vectors.float_data_.size() / vector_count != collection_schema.dimension_) {
             return Status(SERVER_INVALID_VECTOR_DIMENSION,
                           "The vector dimension must be equal to the collection dimension.");
+        }
+    }
+
+    return Status::OK();
+}
+
+Status
+ValidationUtil::ValidateVectorDataSize(const engine::VectorsData& vectors,
+                                       const engine::meta::CollectionSchema& collection_schema) {
+    std::string msg =
+        "The amount of data inserted each time cannot exceed " + std::to_string(MAX_INSERT_DATA_SIZE / M_BYTE) + " MB";
+    if (engine::utils::IsBinaryMetricType(collection_schema.metric_type_)) {
+        if (vectors.binary_data_.size() > MAX_INSERT_DATA_SIZE) {
+            return Status(SERVER_INVALID_ROWRECORD_ARRAY, msg);
+        }
+
+    } else {
+        if (vectors.float_data_.size() * sizeof(float) > MAX_INSERT_DATA_SIZE) {
+            return Status(SERVER_INVALID_ROWRECORD_ARRAY, msg);
         }
     }
 
@@ -364,7 +387,7 @@ ValidationUtil::ValidateCollectionIndexFileSize(int64_t index_file_size) {
         std::string msg = "Invalid index file size: " + std::to_string(index_file_size) + ". " +
                           "The index file size must be within the range of 1 ~ " +
                           std::to_string(INDEX_FILE_SIZE_LIMIT) + ".";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_INDEX_FILE_SIZE, msg);
     }
 
@@ -376,7 +399,7 @@ ValidationUtil::ValidateCollectionIndexMetricType(int32_t metric_type) {
     if (metric_type <= 0 || metric_type > static_cast<int32_t>(engine::MetricType::MAX_VALUE)) {
         std::string msg = "Invalid index metric type: " + std::to_string(metric_type) + ". " +
                           "Make sure the metric type is in MetricType list.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_INDEX_METRIC_TYPE, msg);
     }
     return Status::OK();
@@ -387,7 +410,7 @@ ValidationUtil::ValidateSearchTopk(int64_t top_k) {
     if (top_k <= 0 || top_k > QUERY_MAX_TOPK) {
         std::string msg =
             "Invalid topk: " + std::to_string(top_k) + ". " + "The topk must be within the range of 1 ~ 2048.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_TOPK, msg);
     }
 
@@ -398,7 +421,7 @@ Status
 ValidationUtil::ValidatePartitionName(const std::string& partition_name) {
     if (partition_name.empty()) {
         std::string msg = "Partition name should not be empty.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -406,7 +429,7 @@ ValidationUtil::ValidatePartitionName(const std::string& partition_name) {
     // Collection name size shouldn't exceed 16384.
     if (partition_name.size() > COLLECTION_NAME_SIZE_LIMIT) {
         std::string msg = invalid_msg + "The length of a partition name must be less than 255 characters.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -414,7 +437,7 @@ ValidationUtil::ValidatePartitionName(const std::string& partition_name) {
     char first_char = partition_name[0];
     if (first_char != '_' && std::isalpha(first_char) == 0) {
         std::string msg = invalid_msg + "The first character of a partition name must be an underscore or letter.";
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_COLLECTION_NAME, msg);
     }
 
@@ -423,7 +446,7 @@ ValidationUtil::ValidatePartitionName(const std::string& partition_name) {
         char name_char = partition_name[i];
         if (name_char != '_' && std::isalnum(name_char) == 0) {
             std::string msg = invalid_msg + "Partition name can only contain numbers, letters, and underscores.";
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_COLLECTION_NAME, msg);
         }
     }
@@ -440,14 +463,14 @@ ValidationUtil::ValidatePartitionTags(const std::vector<std::string>& partition_
         StringHelpFunctions::TrimStringBlank(valid_tag);
         if (valid_tag.empty()) {
             std::string msg = "Invalid partition tag: " + valid_tag + ". " + "Partition tag should not be empty.";
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_PARTITION_TAG, msg);
         }
 
         // max length of partition tag
         if (valid_tag.length() > 255) {
             std::string msg = "Invalid partition tag: " + valid_tag + ". " + "Partition tag exceed max length(255).";
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_PARTITION_TAG, msg);
         }
     }
@@ -464,13 +487,13 @@ ValidationUtil::ValidateGpuIndex(int32_t gpu_index) {
 
     if (cuda_err != cudaSuccess) {
         std::string msg = "Failed to get gpu card number, cuda error:" + std::to_string(cuda_err);
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_UNEXPECTED_ERROR, msg);
     }
 
     if (gpu_index >= num_devices) {
         std::string msg = "Invalid gpu index: " + std::to_string(gpu_index);
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_INVALID_ARGUMENT, msg);
     }
 #endif
@@ -489,7 +512,7 @@ ValidationUtil::GetGpuMemory(int32_t gpu_index, size_t& memory) {
     if (cuda_err) {
         std::string msg = "Failed to get gpu properties for gpu" + std::to_string(gpu_index) +
                           " , cuda error:" + std::to_string(cuda_err);
-        SERVER_LOG_ERROR << msg;
+        LOG_SERVER_ERROR_ << msg;
         return Status(SERVER_UNEXPECTED_ERROR, msg);
     }
 
@@ -511,12 +534,12 @@ ValidationUtil::ValidateIpAddress(const std::string& ip_address) {
             return Status::OK();
         case 0: {
             std::string msg = "Invalid IP address: " + ip_address;
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_INVALID_ARGUMENT, msg);
         }
         default: {
             std::string msg = "IP address conversion error: " + ip_address;
-            SERVER_LOG_ERROR << msg;
+            LOG_SERVER_ERROR_ << msg;
             return Status(SERVER_UNEXPECTED_ERROR, msg);
         }
     }
@@ -583,7 +606,7 @@ ValidationUtil::ValidateDbURI(const std::string& uri) {
         std::string dialect = pieces_match[1].str();
         std::transform(dialect.begin(), dialect.end(), dialect.begin(), ::tolower);
         if (dialect.find("mysql") == std::string::npos && dialect.find("sqlite") == std::string::npos) {
-            SERVER_LOG_ERROR << "Invalid dialect in URI: dialect = " << dialect;
+            LOG_SERVER_ERROR_ << "Invalid dialect in URI: dialect = " << dialect;
             okay = false;
         }
 
@@ -593,7 +616,7 @@ ValidationUtil::ValidateDbURI(const std::string& uri) {
                 std::string host = pieces_match[4].str();
                 if (!host.empty() && host != "localhost") {
                     if (ValidateIpAddress(host) != SERVER_SUCCESS) {
-                        SERVER_LOG_ERROR << "Invalid host ip address in uri = " << host;
+                        LOG_SERVER_ERROR_ << "Invalid host ip address in uri = " << host;
                         okay = false;
                     }
                 }
@@ -603,12 +626,12 @@ ValidationUtil::ValidateDbURI(const std::string& uri) {
         if (!port.empty()) {
             auto status = ValidateStringIsNumber(port);
             if (!status.ok()) {
-                SERVER_LOG_ERROR << "Invalid port in uri = " << port;
+                LOG_SERVER_ERROR_ << "Invalid port in uri = " << port;
                 okay = false;
             }
         }
     } else {
-        SERVER_LOG_ERROR << "Wrong URI format: URI = " << uri;
+        LOG_SERVER_ERROR_ << "Wrong URI format: URI = " << uri;
         okay = false;
     }
 
@@ -626,6 +649,11 @@ ValidationUtil::ValidateStoragePath(const std::string& path) {
     std::regex regex(path_pattern);
 
     return std::regex_match(path, regex) ? Status::OK() : Status(SERVER_INVALID_ARGUMENT, "Invalid file path");
+}
+
+bool
+ValidationUtil::IsNumber(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
 }
 
 }  // namespace server

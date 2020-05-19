@@ -422,12 +422,21 @@ Creates a collection.
 
 ##### Body Parameters
 
-| Parameter         | Description                                                                                                                                                                                                                                                 | Required? |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `collection_name` | The name of the collection to create, which must be unique within its database.                                                                                                                                                                             | Yes       |
-| `dimension`       | The dimension of the vectors that are to be inserted into the created collection.                                                                                                                                                                           | Yes       |
-| `index_file_size` | Threshold value that triggers index building for raw data files. The default is 1024.                                                                                                                                                                       | No        |
-| `metric_type`     | The method vector distances are compared in Milvus. The default is L2. Currently supported metrics include `L2` (Euclidean distance), `IP` (Inner Product), `HAMMING` (Hamming distance), `JACCARD` (Jaccard distance), and `TANIMOTO` (Tanomoto distance). | No        |
+| Parameter         | Description                                                                               | Required? |
+| ----------------- | ----------------------------------------------------------------------------------------- | --------- |
+| `collection_name` | The name of the collection to create, which must be unique within its database.           | Yes       |
+| `dimension`       | The dimension of the vectors that are to be inserted into the created collection.         | Yes       |
+| `index_file_size` | Threshold value that triggers index building for raw data files. The default is 1024.     | No        |
+| `metric_type`     | The method vector distances are compared in Milvus. The default is L2.                    | No        |
+
+* Currently supported metrics include:
+    - `L2` (Euclidean distance),
+    - `IP` (Inner Product)
+    - `HAMMING` (Hamming distance)
+    - `JACCARD` (Jaccard distance)
+    - `TANIMOTO` (Tanomoto distance)
+    - `SUBSTRUCTURE` (Sub structure distance)
+    - `SUPERSTRUCTURE` (Super structure distance)
 
 #### Response
 
@@ -531,22 +540,23 @@ $ curl -X GET "http://127.0.0.1:19121/collections/test_collection?info=stat" -H 
 
 ```json
 {
-  "count": 150000,
-  "partitions_stat": [
+  "partitions":[
     {
-      "count": 1000,
-      "partition_tag": "_default",
-      "segments_stat": [
+      "row_count":10000,
+      "segments":[
         {
-          "count": 1000,
-          "index": "FLAT",
-          "segment_name": "1583727170217439000",
-          "size": 5284922
+          "data_size":5284922,
+          "index_name":"IVFFLAT",
+          "name":"1589468453228582000",
+          "row_count":10000
         }
-      ]
+      ],
+      "tag":"_default"
     }
-  ]
+  ],
+  "row_count":10000
 }
+
 ```
 
 ### `/collections/{collection_name}` (DELETE)
@@ -926,7 +936,7 @@ Deletes a partition by tag.
 ##### Request
 
 ```shell
-$ curl -X DELETE "http://127.0.0.1:19121/collections/test_collection/partitions -H "accept: application/json" -d "{\"partition_tag\": \"tags_01\"}"
+$ curl -X DELETE "http://127.0.0.1:19121/collections/test_collection/partitions" -H "accept: application/json" -d "{\"partition_tag\": \"tags_01\"}"
 ```
 
 The deletion is successful if no information is returned.
@@ -972,16 +982,16 @@ $ curl -X GET "http://127.0.0.1:19121/collections/test_collection/segments?offse
 
 ```json
 {
-  "code": 0,
-  "message": "OK",
-  "count": 2,
-  "segments": [
+  "code":0,
+  "message":"OK",
+  "count":1,
+  "segments":[
     {
-      "count": 10000,
-      "index": "IVFFLAT",
-      "partition_tag": "_default",
-      "segment_name": "1583727470444700000",
-      "size": 5284922
+      "data_size":5284922,
+      "index_name":"IVFFLAT",
+      "name":"1589468453228582000",
+      "partition_tag":"_default",
+      "row_count":10000
     }
   ]
 }
@@ -1228,9 +1238,9 @@ Inserts vectors to a collection.
 <tr><td>Header </td><td><pre><code>accept: application/json</code></pre> </td></tr>
 <tr><td>Body</td><td><pre><code>
 {
-  "partition_tag": string,
+  "partition_tag": $string,
   "vectors": [[number($float/$uint8)]],
-  "ids": [integer($int64)]
+  "ids": [$string]
 }
 </code></pre> </td></tr>
 <tr><td>Method</td><td>POST</td></tr>
@@ -1281,9 +1291,9 @@ $ curl -X POST "http://127.0.0.1:19121/collections/test_collection/vectors" -H "
 }
 ```
 
-### `/collections/{collection_name}/vectors?id={vector_id}` (GET)
+### `/collections/{collection_name}/vectors?ids={vector_id_list}` (GET)
 
-Obtain a vector to by ID.
+Obtain vectors by ID.
 
 #### Request
 
@@ -1296,10 +1306,10 @@ Obtain a vector to by ID.
 
 #### Query Parameters
 
-| Parameter         | Description             | Required? |
-| ----------------- | ----------------------- | --------- |
-| `collection_name` | Name of the collection. | Yes       |
-| `vector_id`       | Vector id.              | Yes       |
+| Parameter         | Description                           | Required? |
+| ----------------- | ------------------------------------- | --------- |
+| `collection_name` | Name of the collection.               | Yes       |
+| `vector_id_list`  | Vector id list, separated by commas.  | Yes       |
 
 #### Response
 
@@ -1314,7 +1324,7 @@ Obtain a vector to by ID.
 ##### Request
 
 ```shell
-$ curl -X GET "http://127.0.0.1:19121/collections/test_collection/vectors?id=1578989029645098000" -H "accept: application/json" -H "Content-Type: application/json"
+$ curl -X GET "http://127.0.0.1:19121/collections/test_collection/vectors?ids=1578989029645098000,1578989029645098001" -H "accept: application/json" -H "Content-Type: application/json"
 ```
 
 ##### Response
@@ -1325,6 +1335,10 @@ $ curl -X GET "http://127.0.0.1:19121/collections/test_collection/vectors?id=157
     {
       "id": "1578989029645098000",
       "vector": [0.1]
+    },
+    {
+      "id": "1578989029645098001",
+      "vector": [0.2]
     }
   ]
 }
@@ -1540,6 +1554,11 @@ For each index type, the RESTful API has specific index parameters and search pa
  <td> HNSW</td>
  <td><pre><code>{"M": $int, "efConstruction": $int}</code></pre></td>
  <td><pre><code>{"ef": $int}</code></pre></td>
+</tr>
+<tr>
+ <td> ANNOY</td>
+ <td><pre><code>{"n_trees": $int}</code></pre></td>
+ <td><pre><code>{"search_k": $int}</code></pre></td>
 </tr>
 </table>
 

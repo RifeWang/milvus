@@ -12,6 +12,7 @@
 #pragma once
 
 #include "MilvusApi.h"
+#include "BooleanQuery.h"
 #include "thirdparty/nlohmann/json.hpp"
 
 #include <memory>
@@ -70,8 +71,8 @@ class Utils {
              const std::vector<std::pair<int64_t, milvus::Entity>>& entity_array,
              milvus::TopKQueryResult& topk_query_result);
 
-    static void
-    PrintCollectionInfo(const milvus::CollectionInfo& collection_info);
+    static std::vector<milvus::LeafQueryPtr>
+    GenLeafQuery();
 };
 
 }  // namespace milvus_sdk

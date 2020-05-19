@@ -10,10 +10,12 @@
 // or implied. See the License for the specific language governing permissions and limitations under the License.
 
 #include "server/Server.h"
+#include "server/init/InstanceLockCheck.h"
 
 #include <fcntl.h>
-#include <string.h>
 #include <unistd.h>
+#include <boost/filesystem.hpp>
+#include <cstring>
 
 #include "config/Config.h"
 #include "index/archive/KnowhereResource.h"
@@ -21,6 +23,9 @@
 #include "scheduler/SchedInst.h"
 #include "server/DBWrapper.h"
 #include "server/grpc_impl/GrpcServer.h"
+#include "server/init/CpuChecker.h"
+#include "server/init/GpuChecker.h"
+#include "server/init/StorageChecker.h"
 #include "server/web_impl/WebServer.h"
 #include "src/version.h"
 //#include "storage/s3/S3ClientWrapper.h"
@@ -29,6 +34,8 @@
 #include "utils/LogUtil.h"
 #include "utils/SignalUtil.h"
 #include "utils/TimeRecorder.h"
+
+#include "search/TaskInst.h"
 
 namespace milvus {
 namespace server {
@@ -58,7 +65,7 @@ Server::Daemonize() {
 
     //    std::string log_path(GetLogDirFullPath());
     //    log_path += "zdb_server.(INFO/WARNNING/ERROR/CRITICAL)";
-    //    SERVER_LOG_INFO << "Log will be exported to: " + log_path);
+    //    LOG_SERVER_INFO_ << "Log will be exported to: " + log_path);
 
     pid_t pid = 0;
 
@@ -152,6 +159,14 @@ Server::Start() {
 
         Config& config = Config::GetInstance();
 
+        std::string meta_uri;
+        STATUS_CHECK(config.GetDBConfigBackendUrl(meta_uri));
+        if (meta_uri.length() > 6 && strcasecmp("sqlite", meta_uri.substr(0, 6).c_str()) == 0) {
+            std::cout << "WARNNING: You are using SQLite as the meta data management, "
+                         "which can't be used in production. Please change it to MySQL!"
+                      << std::endl;
+        }
+
         /* Init opentracing tracer from config */
         std::string tracing_config_path;
         s = config.GetTracingConfigJsonConfigPath(tracing_config_path);
@@ -184,14 +199,81 @@ Server::Start() {
         }
         tzset();
 
-        InitLog(log_config_file_);
+        {
+            bool trace_enable = false;
+            bool debug_enable = false;
+            bool info_enable = false;
+            bool warning_enable = false;
+            bool error_enable = false;
+            bool fatal_enable = false;
+            std::string logs_path;
+            int64_t max_log_file_size = 0;
+            int64_t delete_exceeds = 0;
+            STATUS_CHECK(config.GetLogsTraceEnable(trace_enable));
+            STATUS_CHECK(config.GetLogsDebugEnable(debug_enable));
+            STATUS_CHECK(config.GetLogsInfoEnable(info_enable));
+            STATUS_CHECK(config.GetLogsWarningEnable(warning_enable));
+            STATUS_CHECK(config.GetLogsErrorEnable(error_enable));
+            STATUS_CHECK(config.GetLogsFatalEnable(fatal_enable));
+            STATUS_CHECK(config.GetLogsPath(logs_path));
+            STATUS_CHECK(config.GetLogsMaxLogFileSize(max_log_file_size));
+            STATUS_CHECK(config.GetLogsLogRotateNum(delete_exceeds));
+            InitLog(trace_enable, debug_enable, info_enable, warning_enable, error_enable, fatal_enable, logs_path,
+                    max_log_file_size, delete_exceeds);
+        }
+
+        std::string deploy_mode;
+        STATUS_CHECK(config.GetServerConfigDeployMode(deploy_mode));
+
+        if (deploy_mode == "single" || deploy_mode == "cluster_writable") {
+            std::string db_path;
+            STATUS_CHECK(config.GetStorageConfigPrimaryPath(db_path));
+
+            try {
+                // True if a new directory was created, otherwise false.
+                boost::filesystem::create_directories(db_path);
+            } catch (...) {
+                return Status(SERVER_UNEXPECTED_ERROR, "Cannot create db directory");
+            }
+
+            s = InstanceLockCheck::Check(db_path);
+            if (!s.ok()) {
+                std::cerr << "deploy_mode: " << deploy_mode << " instance lock db path failed." << std::endl;
+                return s;
+            }
+
+            bool wal_enable = false;
+            STATUS_CHECK(config.GetWalConfigEnable(wal_enable));
+
+            if (wal_enable) {
+                std::string wal_path;
+                STATUS_CHECK(config.GetWalConfigWalPath(wal_path));
+
+                try {
+                    // True if a new directory was created, otherwise false.
+                    boost::filesystem::create_directories(wal_path);
+                } catch (...) {
+                    return Status(SERVER_UNEXPECTED_ERROR, "Cannot create wal directory");
+                }
+                s = InstanceLockCheck::Check(wal_path);
+                if (!s.ok()) {
+                    std::cerr << "deploy_mode: " << deploy_mode << " instance lock wal path failed." << std::endl;
+                    return s;
+                }
+            }
+        }
 
         // print version information
-        SERVER_LOG_INFO << "Milvus " << BUILD_TYPE << " version: v" << MILVUS_VERSION << ", built at " << BUILD_TIME;
+        LOG_SERVER_INFO_ << "Milvus " << BUILD_TYPE << " version: v" << MILVUS_VERSION << ", built at " << BUILD_TIME;
 #ifdef MILVUS_GPU_VERSION
-        SERVER_LOG_INFO << "GPU edition";
+        LOG_SERVER_INFO_ << "GPU edition";
 #else
-        SERVER_LOG_INFO << "CPU edition";
+        LOG_SERVER_INFO_ << "CPU edition";
+#endif
+        STATUS_CHECK(StorageChecker::CheckStoragePermission());
+        STATUS_CHECK(CpuChecker::CheckCpuInstructionSet());
+#ifdef MILVUS_GPU_VERSION
+        STATUS_CHECK(GpuChecker::CheckGpuEnvironment());
 #endif
         /* record config and hardware information into log */
         LogConfigInFile(config_filename_);
@@ -262,7 +344,7 @@ Server::StartService() {
     Status stat;
     stat = engine::KnowhereResource::Initialize();
     if (!stat.ok()) {
-        SERVER_LOG_ERROR << "KnowhereResource initialize fail: " << stat.message();
+        LOG_SERVER_ERROR_ << "KnowhereResource initialize fail: " << stat.message();
         goto FAIL;
     }
 
@@ -270,7 +352,7 @@ Server::StartService() {
 
     stat = DBWrapper::GetInstance().StartService();
     if (!stat.ok()) {
-        SERVER_LOG_ERROR << "DBWrapper start service fail: " << stat.message();
+        LOG_SERVER_ERROR_ << "DBWrapper start service fail: " << stat.message();
         goto FAIL;
     }
 
@@ -279,9 +361,11 @@ Server::StartService() {
 
     // stat = storage::S3ClientWrapper::GetInstance().StartService();
     // if (!stat.ok()) {
-    //     SERVER_LOG_ERROR << "S3Client start service fail: " << stat.message();
+    //     LOG_SERVER_ERROR_ << "S3Client start service fail: " << stat.message();
     //     goto FAIL;
     // }
+
+    //    search::TaskInst::GetInstance().Start();
 
     return Status::OK();
 FAIL:
@@ -291,6 +375,7 @@ FAIL:
 
 void
 Server::StopService() {
+    //    search::TaskInst::GetInstance().Stop();
     // storage::S3ClientWrapper::GetInstance().StopService();
     web::WebServer::GetInstance().Stop();
     grpc::GrpcServer::GetInstance().Stop();

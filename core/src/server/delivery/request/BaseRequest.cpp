@@ -10,11 +10,13 @@
 // or implied. See the License for the specific language governing permissions and limitations under the License.
 
 #include "server/delivery/request/BaseRequest.h"
+
+#include <map>
+
+#include "server/context/Context.h"
 #include "utils/CommonUtil.h"
 #include "utils/Exception.h"
 #include "utils/Log.h"
-
-#include <map>
 
 namespace milvus {
 namespace server {
@@ -37,6 +39,7 @@ RequestGroup(BaseRequest::RequestType type) {
         {BaseRequest::kDeleteByID, DDL_DML_REQUEST_GROUP},
         {BaseRequest::kGetVectorByID, INFO_REQUEST_GROUP},
         {BaseRequest::kGetVectorIDs, INFO_REQUEST_GROUP},
+        {BaseRequest::kInsertEntity, DDL_DML_REQUEST_GROUP},
 
         // collection operations
         {BaseRequest::kShowCollections, INFO_REQUEST_GROUP},
@@ -47,6 +50,8 @@ RequestGroup(BaseRequest::RequestType type) {
         {BaseRequest::kShowCollectionInfo, INFO_REQUEST_GROUP},
         {BaseRequest::kDropCollection, DDL_DML_REQUEST_GROUP},
         {BaseRequest::kPreloadCollection, DQL_REQUEST_GROUP},
+        {BaseRequest::kCreateHybridCollection, DDL_DML_REQUEST_GROUP},
+        {BaseRequest::kDescribeHybridCollection, INFO_REQUEST_GROUP},
 
         // partition operations
         {BaseRequest::kCreatePartition, DDL_DML_REQUEST_GROUP},
@@ -62,11 +67,12 @@ RequestGroup(BaseRequest::RequestType type) {
         {BaseRequest::kSearchByID, DQL_REQUEST_GROUP},
         {BaseRequest::kSearch, DQL_REQUEST_GROUP},
         {BaseRequest::kSearchCombine, DQL_REQUEST_GROUP},
+        {BaseRequest::kHybridSearch, DQL_REQUEST_GROUP},
     };
 
     auto iter = s_map_type_group.find(type);
     if (iter == s_map_type_group.end()) {
-        SERVER_LOG_ERROR << "Unsupported request type: " << type;
+        LOG_SERVER_ERROR_ << "Unsupported request type: " << type;
         throw Exception(SERVER_NOT_IMPLEMENT, "request group undefined");
     }
     return iter->second;
@@ -77,6 +83,9 @@ BaseRequest::BaseRequest(const std::shared_ptr<milvus::server::Context>& context
                          bool async)
     : context_(context), type_(type), async_(async), done_(false) {
     request_group_ = milvus::server::RequestGroup(type);
+    if (nullptr != context_) {
+        context_->SetRequestType(type_);
+    }
 }
 
 BaseRequest::~BaseRequest() {
@@ -125,7 +134,7 @@ void
 BaseRequest::set_status(const Status& status) {
     status_ = status;
     if (!status_.ok()) {
-        SERVER_LOG_ERROR << status_.message();
+        LOG_SERVER_ERROR_ << status_.message();
     }
 }
 

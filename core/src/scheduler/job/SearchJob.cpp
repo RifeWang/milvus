@@ -21,6 +21,12 @@ SearchJob::SearchJob(const std::shared_ptr<server::Context>& context, uint64_t t
     : Job(JobType::SEARCH), context_(context), topk_(topk), extra_params_(extra_params), vectors_(vectors) {
 }
 
+SearchJob::SearchJob(const std::shared_ptr<server::Context>& context, milvus::query::GeneralQueryPtr general_query,
+                     std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+                     const engine::VectorsData& vectors)
+    : Job(JobType::SEARCH), context_(context), general_query_(general_query), attr_type_(attr_type), vectors_(vectors) {
+}
+
 bool
 SearchJob::AddIndexFile(const SegmentSchemaPtr& index_file) {
     std::unique_lock<std::mutex> lock(mutex_);
@@ -28,7 +34,7 @@ SearchJob::AddIndexFile(const SegmentSchemaPtr& index_file) {
         return false;
     }
 
-    SERVER_LOG_DEBUG << LogOut("[%s][%ld] SearchJob %ld add index file: %ld", "search", 0, id(), index_file->id_);
+    LOG_SERVER_DEBUG_ << LogOut("[%s][%ld] SearchJob %ld add index file: %ld", "search", 0, id(), index_file->id_);
 
     index_files_[index_file->id_] = index_file;
     return true;
@@ -38,7 +44,7 @@ void
 SearchJob::WaitResult() {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait(lock, [this] { return index_files_.empty(); });
-    SERVER_LOG_DEBUG << LogOut("[%s][%ld] SearchJob %ld all done", "search", 0, id());
+    LOG_SERVER_DEBUG_ << LogOut("[%s][%ld] SearchJob %ld all done", "search", 0, id());
 }
 
 void
@@ -49,7 +55,7 @@ SearchJob::SearchDone(size_t index_id) {
         cv_.notify_all();
     }
 
-    SERVER_LOG_DEBUG << LogOut("[%s][%ld] SearchJob %ld finish index file: %ld", "search", 0, id(), index_id);
+    LOG_SERVER_DEBUG_ << LogOut("[%s][%ld] SearchJob %ld finish index file: %ld", "search", 0, id(), index_id);
 }
 
 ResultIds&
