@@ -40,13 +40,19 @@ using Id2IndexMap = std::unordered_map<size_t, SegmentSchemaPtr>;
 using ResultIds = engine::ResultIds;
 using ResultDistances = engine::ResultDistances;
 
+struct SearchTimeStat {
+    double query_time = 0.0;
+    double map_uids_time = 0.0;
+    double reduce_time = 0.0;
+};
+
 class SearchJob : public Job {
  public:
     SearchJob(const std::shared_ptr<server::Context>& context, uint64_t topk, const milvus::json& extra_params,
               const engine::VectorsData& vectors);
 
     SearchJob(const std::shared_ptr<server::Context>& context, query::GeneralQueryPtr general_query,
-              std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+              query::QueryPtr query_ptr, std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
               const engine::VectorsData& vectorsData);
 
  public:
@@ -110,6 +116,11 @@ class SearchJob : public Job {
         return general_query_;
     }
 
+    query::QueryPtr
+    query_ptr() {
+        return query_ptr_;
+    }
+
     std::unordered_map<std::string, engine::meta::hybrid::DataType>&
     attr_type() {
         return attr_type_;
@@ -118,6 +129,11 @@ class SearchJob : public Job {
     uint64_t&
     vector_count() {
         return vector_count_;
+    }
+
+    SearchTimeStat&
+    time_stat() {
+        return time_stat_;
     }
 
  private:
@@ -135,11 +151,14 @@ class SearchJob : public Job {
     Status status_;
 
     query::GeneralQueryPtr general_query_;
+    query::QueryPtr query_ptr_;
     std::unordered_map<std::string, engine::meta::hybrid::DataType> attr_type_;
     uint64_t vector_count_;
 
     std::mutex mutex_;
     std::condition_variable cv_;
+
+    SearchTimeStat time_stat_;
 };
 
 using SearchJobPtr = std::shared_ptr<SearchJob>;

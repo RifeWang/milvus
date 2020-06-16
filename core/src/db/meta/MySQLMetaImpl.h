@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -41,13 +42,13 @@ class MySQLMetaImpl : public Meta {
     HasCollection(const std::string& collection_id, bool& has_or_not, bool is_root = false) override;
 
     Status
-    AllCollections(std::vector<CollectionSchema>& collection_schema_array) override;
+    AllCollections(std::vector<CollectionSchema>& collection_schema_array, bool is_root = false) override;
 
     Status
-    DropCollection(const std::string& collection_id) override;
+    DropCollections(const std::vector<std::string>& collection_id_array) override;
 
     Status
-    DeleteCollectionFiles(const std::string& collection_id) override;
+    DeleteCollectionFiles(const std::vector<std::string>& collection_id_array) override;
 
     Status
     CreateCollectionFile(SegmentSchema& file_schema) override;
@@ -110,6 +111,10 @@ class MySQLMetaImpl : public Meta {
     FilesToSearch(const std::string& collection_id, FilesHolder& files_holder) override;
 
     Status
+    FilesToSearchEx(const std::string& root_collection, const std::set<std::string>& partition_id_array,
+                    FilesHolder& files_holder) override;
+
+    Status
     FilesToMerge(const std::string& collection_id, FilesHolder& files_holder) override;
 
     Status
@@ -118,6 +123,10 @@ class MySQLMetaImpl : public Meta {
     Status
     FilesByType(const std::string& collection_id, const std::vector<int>& file_types,
                 FilesHolder& files_holder) override;
+
+    Status
+    FilesByTypeEx(const std::vector<meta::CollectionSchema>& collections, const std::vector<int>& file_types,
+                  FilesHolder& files_holder) override;
 
     Status
     FilesByID(const std::vector<size_t>& ids, FilesHolder& files_holder) override;
@@ -152,9 +161,6 @@ class MySQLMetaImpl : public Meta {
     Status
     DescribeHybridCollection(CollectionSchema& collection_schema, hybrid::FieldsSchema& fields_schema) override;
 
-    Status
-    CreateHybridCollectionFile(SegmentSchema& file_schema) override;
-
  private:
     Status
     NextFileId(std::string& file_id);
@@ -173,7 +179,7 @@ class MySQLMetaImpl : public Meta {
     const int mode_;
 
     std::shared_ptr<MySQLConnectionPool> mysql_connection_pool_;
-    bool safe_grab_ = false;
+    bool safe_grab_ = false;  // Safely graps a connection from mysql pool
 
     std::mutex meta_mutex_;
     std::mutex genid_mutex_;

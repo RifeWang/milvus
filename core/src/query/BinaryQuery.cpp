@@ -64,10 +64,10 @@ Status
 GenBinaryQuery(BooleanQueryPtr query, BinaryQueryPtr& binary_query) {
     if (query->getBooleanQuerys().size() == 0) {
         if (binary_query->relation == QueryRelation::AND || binary_query->relation == QueryRelation::OR) {
-            // Put VectorQuery to the end of leafqueries
+            // Put VectorQuery to the end of leaf queries
             auto query_size = query->getLeafQueries().size();
             for (uint64_t i = 0; i < query_size; ++i) {
-                if (query->getLeafQueries()[i]->vector_query != nullptr) {
+                if (query->getLeafQueries()[i]->vector_placeholder.size() > 0) {
                     std::swap(query->getLeafQueries()[i], query->getLeafQueries()[0]);
                     break;
                 }
@@ -84,6 +84,8 @@ GenBinaryQuery(BooleanQueryPtr query, BinaryQueryPtr& binary_query) {
                     binary_query->relation = QueryRelation::OR;
                     return GenBinaryQuery(query, binary_query);
                 }
+                default:
+                    return Status::OK();
             }
         }
     }
@@ -94,15 +96,15 @@ GenBinaryQuery(BooleanQueryPtr query, BinaryQueryPtr& binary_query) {
         switch (bc->getOccur()) {
             case Occur::MUST: {
                 binary_query->relation = QueryRelation::AND;
-                Status s = GenBinaryQuery(bc, binary_query);
-                return s;
+                return GenBinaryQuery(bc, binary_query);
             }
             case Occur::MUST_NOT:
             case Occur::SHOULD: {
                 binary_query->relation = QueryRelation::OR;
-                Status s = GenBinaryQuery(bc, binary_query);
-                return s;
+                return GenBinaryQuery(bc, binary_query);
             }
+            default:
+                return Status::OK();
         }
     }
 
@@ -211,9 +213,8 @@ BinaryQueryHeight(BinaryQueryPtr& binary_query) {
 
 bool
 ValidateBinaryQuery(BinaryQueryPtr& binary_query) {
-    // Only for one layer BooleanQuery
     uint64_t height = BinaryQueryHeight(binary_query);
-    return height > 1 && height < 4;
+    return height > 1;
 }
 
 }  // namespace query

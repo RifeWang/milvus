@@ -115,6 +115,16 @@ DBImpl::Start() {
     // LOG_ENGINE_TRACE_ << "DB service start";
     initialized_.store(true, std::memory_order_release);
 
+    // server may be closed unexpected, these un-merge files need to be merged when server restart
+    // and soft-delete files need to be deleted when server restart
+    std::set<std::string> merge_collection_ids;
+    std::vector<meta::CollectionSchema> collection_schema_array;
+    meta_ptr_->AllCollections(collection_schema_array);
+    for (auto& schema : collection_schema_array) {
+        merge_collection_ids.insert(schema.collection_id_);
+    }
+    StartMergeTask(merge_collection_ids, true);
+
     // wal
     if (options_.wal_enable_) {
         auto error_code = DB_ERROR;
@@ -158,7 +168,10 @@ DBImpl::Start() {
     }
 
     // background metric thread
-    bg_metric_thread_ = std::thread(&DBImpl::BackgroundMetricThread, this);
+    fiu_do_on("options_metric_enable", options_.metric_enable_ = true);
+    if (options_.metric_enable_) {
+        bg_metric_thread_ = std::thread(&DBImpl::BackgroundMetricThread, this);
+    }
 
     return Status::OK();
 }
@@ -196,8 +209,10 @@ DBImpl::Stop() {
     }
 
     // wait metric thread exit
-    swn_metric_.Notify();
-    bg_metric_thread_.join();
+    if (options_.metric_enable_) {
+        swn_metric_.Notify();
+        bg_metric_thread_.join();
+    }
 
     // LOG_ENGINE_TRACE_ << "DB service stop";
     return Status::OK();
@@ -255,11 +270,37 @@ DBImpl::DropCollection(const std::string& collection_id) {
         return SHUTDOWN_ERROR;
     }
 
+    // dates partly delete files of the collection but currently we don't support
+    LOG_ENGINE_DEBUG_ << "Prepare to delete collection " << collection_id;
+
+    Status status;
     if (options_.wal_enable_) {
         wal_mgr_->DropCollection(collection_id);
     }
 
-    return DropCollectionRecursively(collection_id);
+    status = mem_mgr_->EraseMemVector(collection_id);      // not allow insert
+    status = meta_ptr_->DropCollections({collection_id});  // soft delete collection
+    index_failed_checker_.CleanFailedIndexFileOfCollection(collection_id);
+
+    std::vector<meta::CollectionSchema> partition_array;
+    status = meta_ptr_->ShowPartitions(collection_id, partition_array);
+    std::vector<std::string> partition_id_array;
+    for (auto& schema : partition_array) {
+        if (options_.wal_enable_) {
+            wal_mgr_->DropCollection(schema.collection_id_);
+        }
+        status = mem_mgr_->EraseMemVector(schema.collection_id_);
+        index_failed_checker_.CleanFailedIndexFileOfCollection(schema.collection_id_);
+        partition_id_array.push_back(schema.collection_id_);
+    }
+
+    status = meta_ptr_->DropCollections(partition_id_array);
+    fiu_do_on("DBImpl.DropCollection.failed", status = Status(DB_ERROR, ""));
+    if (!status.ok()) {
+        return status;
+    }
+
+    return Status::OK();
 }
 
 Status
@@ -386,13 +427,15 @@ DBImpl::GetCollectionInfo(const std::string& collection_id, std::string& collect
 }
 
 Status
-DBImpl::PreloadCollection(const std::string& collection_id) {
+DBImpl::PreloadCollection(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                          bool force) {
     if (!initialized_.load(std::memory_order_acquire)) {
         return SHUTDOWN_ERROR;
     }
 
     // step 1: get all collection files from parent collection
     meta::FilesHolder files_holder;
+#if 0
     auto status = meta_ptr_->FilesToSearch(collection_id, files_holder);
     if (!status.ok()) {
         return status;
@@ -404,6 +447,25 @@ DBImpl::PreloadCollection(const std::string& collection_id) {
     for (auto& schema : partition_array) {
         status = meta_ptr_->FilesToSearch(schema.collection_id_, files_holder);
     }
+#else
+    auto status = meta_ptr_->FilesToSearch(collection_id, files_holder);
+    if (!status.ok()) {
+        return status;
+    }
+
+    std::vector<meta::CollectionSchema> partition_array;
+    status = meta_ptr_->ShowPartitions(collection_id, partition_array);
+
+    std::set<std::string> partition_ids;
+    for (auto& schema : partition_array) {
+        partition_ids.insert(schema.collection_id_);
+    }
+
+    status = meta_ptr_->FilesToSearchEx(collection_id, partition_ids, files_holder);
+    if (!status.ok()) {
+        return status;
+    }
+#endif
 
     int64_t size = 0;
     int64_t cache_total = cache::CpuCacheMgr::GetInstance()->CacheCapacity();
@@ -416,6 +478,12 @@ DBImpl::PreloadCollection(const std::string& collection_id) {
                       << " files need to be pre-loaded";
     TimeRecorderAuto rc("Pre-load collection:" + collection_id);
     for (auto& file : files_array) {
+        // client break the connection, no need to continue
+        if (context && context->IsConnectionBroken()) {
+            LOG_ENGINE_DEBUG_ << "Client connection broken, stop load collection";
+            break;
+        }
+
         EngineType engine_type;
         if (file.file_type_ == meta::SegmentSchema::FILE_TYPE::RAW ||
             file.file_type_ == meta::SegmentSchema::FILE_TYPE::TO_INDEX ||
@@ -447,7 +515,7 @@ DBImpl::PreloadCollection(const std::string& collection_id) {
             }
 
             size += engine->Size();
-            if (size > available_size) {
+            if (!force && size > available_size) {
                 LOG_ENGINE_DEBUG_ << "Pre-load cancelled since cache is almost full";
                 return Status(SERVER_CACHE_FULL, "Cache is full");
             }
@@ -455,6 +523,63 @@ DBImpl::PreloadCollection(const std::string& collection_id) {
             std::string msg = "Pre-load collection encounter exception: " + std::string(ex.what());
             LOG_ENGINE_ERROR_ << msg;
             return Status(DB_ERROR, msg);
+        }
+    }
+
+    return Status::OK();
+}
+
+Status
+DBImpl::ReLoadSegmentsDeletedDocs(const std::string& collection_id, const std::vector<int64_t>& segment_ids) {
+    if (!initialized_.load(std::memory_order_acquire)) {
+        return SHUTDOWN_ERROR;
+    }
+
+    meta::FilesHolder files_holder;
+    std::vector<size_t> file_ids;
+    for (auto& id : segment_ids) {
+        file_ids.emplace_back(id);
+    }
+
+    auto status = meta_ptr_->FilesByID(file_ids, files_holder);
+    if (!status.ok()) {
+        std::string err_msg = "Failed get file holders by ids: " + status.ToString();
+        LOG_ENGINE_ERROR_ << err_msg;
+        return Status(DB_ERROR, err_msg);
+    }
+
+    milvus::engine::meta::SegmentsSchema hold_files = files_holder.HoldFiles();
+
+    for (auto& file : hold_files) {
+        std::string segment_dir;
+        utils::GetParentPath(file.location_, segment_dir);
+
+        auto data_obj_ptr = cache::CpuCacheMgr::GetInstance()->GetIndex(file.location_);
+        auto index = std::static_pointer_cast<knowhere::VecIndex>(data_obj_ptr);
+        if (nullptr == index) {
+            LOG_ENGINE_WARNING_ << "Index " << file.location_ << " not found";
+            continue;
+        }
+
+        segment::SegmentReader segment_reader(segment_dir);
+
+        segment::DeletedDocsPtr delete_docs = std::make_shared<segment::DeletedDocs>();
+        segment_reader.LoadDeletedDocs(delete_docs);
+        auto& docs_offsets = delete_docs->GetDeletedDocs();
+
+        faiss::ConcurrentBitsetPtr blacklist = index->GetBlacklist();
+        if (nullptr == blacklist) {
+            LOG_ENGINE_WARNING_ << "Index " << file.location_ << " is empty";
+            faiss::ConcurrentBitsetPtr concurrent_bitset_ptr =
+                std::make_shared<faiss::ConcurrentBitset>(index->Count());
+            index->SetBlacklist(concurrent_bitset_ptr);
+            blacklist = concurrent_bitset_ptr;
+        }
+
+        for (auto& i : docs_offsets) {
+            if (!blacklist->test(i)) {
+                blacklist->set(i);
+            }
         }
     }
 
@@ -487,7 +612,11 @@ DBImpl::CreatePartition(const std::string& collection_id, const std::string& par
     }
 
     uint64_t lsn = 0;
-    meta_ptr_->GetCollectionFlushLSN(collection_id, lsn);
+    if (options_.wal_enable_) {
+        lsn = wal_mgr_->CreatePartition(collection_id, partition_tag);
+    } else {
+        meta_ptr_->GetCollectionFlushLSN(collection_id, lsn);
+    }
     return meta_ptr_->CreatePartition(collection_id, partition_name, partition_tag, lsn);
 }
 
@@ -543,6 +672,10 @@ DBImpl::DropPartitionByTag(const std::string& collection_id, const std::string& 
     if (!status.ok()) {
         LOG_ENGINE_ERROR_ << status.message();
         return status;
+    }
+
+    if (options_.wal_enable_) {
+        wal_mgr_->DropPartition(collection_id, partition_tag);
     }
 
     return DropPartition(partition_name);
@@ -891,7 +1024,6 @@ DBImpl::Flush(const std::string& collection_id) {
             swn_wal_.Notify();
             flush_req_swn_.Wait();
         }
-
     } else {
         LOG_ENGINE_DEBUG_ << "MemTable flush";
         InternalFlush(collection_id);
@@ -911,6 +1043,7 @@ DBImpl::Flush() {
     LOG_ENGINE_DEBUG_ << "Begin flush all collections";
 
     Status status;
+    fiu_do_on("options_wal_enable_false", options_.wal_enable_ = false);
     if (options_.wal_enable_) {
         LOG_ENGINE_DEBUG_ << "WAL flush";
         auto lsn = wal_mgr_->Flush();
@@ -929,7 +1062,7 @@ DBImpl::Flush() {
 }
 
 Status
-DBImpl::Compact(const std::string& collection_id, double threshold) {
+DBImpl::Compact(const std::shared_ptr<server::Context>& context, const std::string& collection_id, double threshold) {
     if (!initialized_.load(std::memory_order_acquire)) {
         return SHUTDOWN_ERROR;
     }
@@ -953,7 +1086,9 @@ DBImpl::Compact(const std::string& collection_id, double threshold) {
 
     LOG_ENGINE_DEBUG_ << "Before compacting, wait for build index thread to finish...";
 
-    // WaitBuildIndexFinish();
+    std::vector<meta::CollectionSchema> collection_array;
+    status = meta_ptr_->ShowPartitions(collection_id, collection_array);
+    collection_array.push_back(collection_schema);
 
     const std::lock_guard<std::mutex> index_lock(build_index_mutex_);
     const std::lock_guard<std::mutex> merge_lock(flush_merge_compact_mutex_);
@@ -964,7 +1099,7 @@ DBImpl::Compact(const std::string& collection_id, double threshold) {
     std::vector<int> file_types{meta::SegmentSchema::FILE_TYPE::RAW, meta::SegmentSchema::FILE_TYPE::TO_INDEX,
                                 meta::SegmentSchema::FILE_TYPE::BACKUP};
     meta::FilesHolder files_holder;
-    status = meta_ptr_->FilesByType(collection_id, file_types, files_holder);
+    status = meta_ptr_->FilesByTypeEx(collection_array, file_types, files_holder);
     if (!status.ok()) {
         std::string err_msg = "Failed to get files to compact: " + status.message();
         LOG_ENGINE_ERROR_ << err_msg;
@@ -977,6 +1112,12 @@ DBImpl::Compact(const std::string& collection_id, double threshold) {
     // attention: here is a copy, not reference, since files_holder.UnmarkFile will change the array internal
     milvus::engine::meta::SegmentsSchema files_to_compact = files_holder.HoldFiles();
     for (auto iter = files_to_compact.begin(); iter != files_to_compact.end();) {
+        // client break the connection, no need to continue
+        if (context && context->IsConnectionBroken()) {
+            LOG_ENGINE_DEBUG_ << "Client connection broken, stop compact operation";
+            break;
+        }
+
         meta::SegmentSchema file = *iter;
         iter = files_to_compact.erase(iter);
 
@@ -994,7 +1135,7 @@ DBImpl::Compact(const std::string& collection_id, double threshold) {
 
         meta::SegmentsSchema files_to_update;
         if (deleted_docs_size != 0) {
-            compact_status = CompactFile(collection_id, threshold, file, files_to_update);
+            compact_status = CompactFile(file, threshold, files_to_update);
 
             if (!compact_status.ok()) {
                 LOG_ENGINE_ERROR_ << "Compact failed for segment " << file.segment_id_ << ": "
@@ -1025,9 +1166,8 @@ DBImpl::Compact(const std::string& collection_id, double threshold) {
 }
 
 Status
-DBImpl::CompactFile(const std::string& collection_id, double threshold, const meta::SegmentSchema& file,
-                    meta::SegmentsSchema& files_to_update) {
-    LOG_ENGINE_DEBUG_ << "Compacting segment " << file.segment_id_ << " for collection: " << collection_id;
+DBImpl::CompactFile(const meta::SegmentSchema& file, double threshold, meta::SegmentsSchema& files_to_update) {
+    LOG_ENGINE_DEBUG_ << "Compacting segment " << file.segment_id_ << " for collection: " << file.collection_id_;
 
     std::string segment_dir_to_merge;
     utils::GetParentPath(file.location_, segment_dir_to_merge);
@@ -1039,7 +1179,7 @@ DBImpl::CompactFile(const std::string& collection_id, double threshold, const me
         auto status = segment_reader_to_merge.LoadDeletedDocs(deleted_docs_ptr);
         if (status.ok()) {
             auto delete_items = deleted_docs_ptr->GetDeletedDocs();
-            double delete_rate = (double)delete_items.size() / (double)file.row_count_;
+            double delete_rate = (double)delete_items.size() / (double)(delete_items.size() + file.row_count_);
             if (delete_rate < threshold) {
                 LOG_ENGINE_DEBUG_ << "Delete rate less than " << threshold << ", no need to compact for"
                                   << segment_dir_to_merge;
@@ -1050,8 +1190,7 @@ DBImpl::CompactFile(const std::string& collection_id, double threshold, const me
 
     // Create new collection file
     meta::SegmentSchema compacted_file;
-    compacted_file.collection_id_ = collection_id;
-    // compacted_file.date_ = date;
+    compacted_file.collection_id_ = file.collection_id_;
     compacted_file.file_type_ = meta::SegmentSchema::NEW_MERGE;  // TODO: use NEW_MERGE for now
     auto status = meta_ptr_->CreateCollectionFile(compacted_file);
 
@@ -1061,7 +1200,6 @@ DBImpl::CompactFile(const std::string& collection_id, double threshold, const me
     }
 
     // Compact (merge) file to the newly created collection file
-
     std::string new_segment_dir;
     utils::GetParentPath(compacted_file.location_, new_segment_dir);
     auto segment_writer_ptr = std::make_shared<segment::SegmentWriter>(new_segment_dir);
@@ -1083,7 +1221,7 @@ DBImpl::CompactFile(const std::string& collection_id, double threshold, const me
         return status;
     }
 
-    // Update compacted file state, if origin file is backup or to_index, set compected file to to_index
+    // Update compacted file state, if origin file is backup or to_index, set compacted file to to_index
     compacted_file.file_size_ = segment_writer_ptr->Size();
     compacted_file.row_count_ = segment_writer_ptr->VectorCount();
     if ((file.file_type_ == (int32_t)meta::SegmentSchema::BACKUP ||
@@ -1128,8 +1266,47 @@ DBImpl::CompactFile(const std::string& collection_id, double threshold, const me
 }
 
 Status
-DBImpl::GetVectorsByID(const std::string& collection_id, const IDNumbers& id_array,
+DBImpl::GetVectorsByID(const engine::meta::CollectionSchema& collection, const IDNumbers& id_array,
                        std::vector<engine::VectorsData>& vectors) {
+    if (!initialized_.load(std::memory_order_acquire)) {
+        return SHUTDOWN_ERROR;
+    }
+
+    meta::FilesHolder files_holder;
+    std::vector<int> file_types{meta::SegmentSchema::FILE_TYPE::RAW, meta::SegmentSchema::FILE_TYPE::TO_INDEX,
+                                meta::SegmentSchema::FILE_TYPE::BACKUP};
+
+    std::vector<meta::CollectionSchema> collection_array;
+    auto status = meta_ptr_->ShowPartitions(collection.collection_id_, collection_array);
+
+    collection_array.push_back(collection);
+    status = meta_ptr_->FilesByTypeEx(collection_array, file_types, files_holder);
+    if (!status.ok()) {
+        std::string err_msg = "Failed to get files for GetVectorByID: " + status.message();
+        LOG_ENGINE_ERROR_ << err_msg;
+        return status;
+    }
+
+    if (files_holder.HoldFiles().empty()) {
+        LOG_ENGINE_DEBUG_ << "No files to get vector by id from";
+        return Status(DB_NOT_FOUND, "Collection is empty");
+    }
+
+    cache::CpuCacheMgr::GetInstance()->PrintInfo();
+    status = GetVectorsByIdHelper(id_array, vectors, files_holder);
+    cache::CpuCacheMgr::GetInstance()->PrintInfo();
+
+    if (vectors.empty()) {
+        std::string msg = "Vectors not found in collection " + collection.collection_id_;
+        LOG_ENGINE_DEBUG_ << msg;
+    }
+
+    return status;
+}
+
+Status
+DBImpl::GetEntitiesByID(const std::string& collection_id, const milvus::engine::IDNumbers& id_array,
+                        std::vector<engine::VectorsData>& vectors, std::vector<engine::AttrsData>& attrs) {
     if (!initialized_.load(std::memory_order_acquire)) {
         return SHUTDOWN_ERROR;
     }
@@ -1144,23 +1321,43 @@ DBImpl::GetVectorsByID(const std::string& collection_id, const IDNumbers& id_arr
         return status;
     }
 
+    engine::meta::CollectionSchema collection_schema;
+    engine::meta::hybrid::FieldsSchema fields_schema;
+    collection_schema.collection_id_ = collection_id;
+    status = meta_ptr_->DescribeHybridCollection(collection_schema, fields_schema);
+    if (!status.ok()) {
+        return status;
+    }
+    std::unordered_map<std::string, engine::meta::hybrid::DataType> attr_type;
+    for (auto schema : fields_schema.fields_schema_) {
+        if (schema.field_type_ == (int32_t)engine::meta::hybrid::DataType::VECTOR) {
+            continue;
+        }
+        attr_type.insert(std::make_pair(schema.field_name_, (engine::meta::hybrid::DataType)schema.field_type_));
+    }
+
     meta::FilesHolder files_holder;
     std::vector<int> file_types{meta::SegmentSchema::FILE_TYPE::RAW, meta::SegmentSchema::FILE_TYPE::TO_INDEX,
                                 meta::SegmentSchema::FILE_TYPE::BACKUP};
 
     status = meta_ptr_->FilesByType(collection_id, file_types, files_holder);
     if (!status.ok()) {
-        std::string err_msg = "Failed to get files for GetVectorsByID: " + status.message();
+        std::string err_msg = "Failed to get files for GetEntitiesByID: " + status.message();
         LOG_ENGINE_ERROR_ << err_msg;
         return status;
     }
 
     std::vector<meta::CollectionSchema> partition_array;
     status = meta_ptr_->ShowPartitions(collection_id, partition_array);
+    if (!status.ok()) {
+        std::string err_msg = "Failed to get partitions for GetEntitiesByID: " + status.message();
+        LOG_ENGINE_ERROR_ << err_msg;
+        return status;
+    }
     for (auto& schema : partition_array) {
         status = meta_ptr_->FilesByType(schema.collection_id_, file_types, files_holder);
         if (!status.ok()) {
-            std::string err_msg = "Failed to get files for GetVectorByID: " + status.message();
+            std::string err_msg = "Failed to get files for GetEntitiesByID: " + status.message();
             LOG_ENGINE_ERROR_ << err_msg;
             return status;
         }
@@ -1172,7 +1369,7 @@ DBImpl::GetVectorsByID(const std::string& collection_id, const IDNumbers& id_arr
     }
 
     cache::CpuCacheMgr::GetInstance()->PrintInfo();
-    status = GetVectorsByIdHelper(collection_id, id_array, vectors, files_holder);
+    status = GetEntitiesByIdHelper(collection_id, id_array, attr_type, vectors, attrs, files_holder);
     cache::CpuCacheMgr::GetInstance()->PrintInfo();
 
     return status;
@@ -1251,8 +1448,8 @@ DBImpl::GetVectorIDs(const std::string& collection_id, const std::string& segmen
 }
 
 Status
-DBImpl::GetVectorsByIdHelper(const std::string& collection_id, const IDNumbers& id_array,
-                             std::vector<engine::VectorsData>& vectors, meta::FilesHolder& files_holder) {
+DBImpl::GetVectorsByIdHelper(const IDNumbers& id_array, std::vector<engine::VectorsData>& vectors,
+                             meta::FilesHolder& files_holder) {
     // attention: this is a copy, not a reference, since the files_holder.UnMarkFile will change the array internal
     milvus::engine::meta::SegmentsSchema files = files_holder.HoldFiles();
     LOG_ENGINE_DEBUG_ << "Getting vector by id in " << files.size() << " files, id count = " << id_array.size();
@@ -1269,12 +1466,18 @@ DBImpl::GetVectorsByIdHelper(const std::string& collection_id, const IDNumbers& 
 
     IDNumbers temp_ids = id_array;
     for (auto& file : files) {
+        if (temp_ids.empty()) {
+            break;  // all vectors found, no need to continue
+        }
         // Load bloom filter
         std::string segment_dir;
         engine::utils::GetParentPath(file.location_, segment_dir);
         segment::SegmentReader segment_reader(segment_dir);
         segment::IdBloomFilterPtr id_bloom_filter_ptr;
-        segment_reader.LoadBloomFilter(id_bloom_filter_ptr);
+        auto status = segment_reader.LoadBloomFilter(id_bloom_filter_ptr);
+        if (!status.ok()) {
+            return status;
+        }
 
         for (IDNumbers::iterator it = temp_ids.begin(); it != temp_ids.end();) {
             int64_t vector_id = *it;
@@ -1351,6 +1554,161 @@ DBImpl::GetVectorsByIdHelper(const std::string& collection_id, const IDNumbers& 
         vectors.emplace_back(data);
     }
 
+    return Status::OK();
+}
+
+Status
+DBImpl::GetEntitiesByIdHelper(const std::string& collection_id, const milvus::engine::IDNumbers& id_array,
+                              std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+                              std::vector<engine::VectorsData>& vectors, std::vector<engine::AttrsData>& attrs,
+                              milvus::engine::meta::FilesHolder& files_holder) {
+    // attention: this is a copy, not a reference, since the files_holder.UnMarkFile will change the array internal
+    milvus::engine::meta::SegmentsSchema files = files_holder.HoldFiles();
+    LOG_ENGINE_DEBUG_ << "Getting vector by id in " << files.size() << " files, id count = " << id_array.size();
+
+    // sometimes not all of id_array can be found, we need to return empty vector for id not found
+    // for example:
+    // id_array = [1, -1, 2, -1, 3]
+    // vectors should return [valid_vector, empty_vector, valid_vector, empty_vector, valid_vector]
+    // the ID2RAW is to ensure returned vector sequence is consist with id_array
+    using ID2ATTR = std::map<int64_t, engine::AttrsData>;
+    using ID2VECTOR = std::map<int64_t, engine::VectorsData>;
+    ID2ATTR map_id2attr;
+    ID2VECTOR map_id2vector;
+
+    IDNumbers temp_ids = id_array;
+    for (auto& file : files) {
+        // Load bloom filter
+        std::string segment_dir;
+        engine::utils::GetParentPath(file.location_, segment_dir);
+        segment::SegmentReader segment_reader(segment_dir);
+        segment::IdBloomFilterPtr id_bloom_filter_ptr;
+        segment_reader.LoadBloomFilter(id_bloom_filter_ptr);
+
+        for (IDNumbers::iterator it = temp_ids.begin(); it != temp_ids.end();) {
+            int64_t vector_id = *it;
+            // each id must has a VectorsData
+            // if vector not found for an id, its VectorsData's vector_count = 0, else 1
+            AttrsData& attr_ref = map_id2attr[vector_id];
+            VectorsData& vector_ref = map_id2vector[vector_id];
+
+            // Check if the id is present in bloom filter.
+            if (id_bloom_filter_ptr->Check(vector_id)) {
+                // Load uids and check if the id is indeed present. If yes, find its offset.
+                std::vector<segment::doc_id_t> uids;
+                auto status = segment_reader.LoadUids(uids);
+                if (!status.ok()) {
+                    return status;
+                }
+
+                auto found = std::find(uids.begin(), uids.end(), vector_id);
+                if (found != uids.end()) {
+                    auto offset = std::distance(uids.begin(), found);
+
+                    // Check whether the id has been deleted
+                    segment::DeletedDocsPtr deleted_docs_ptr;
+                    status = segment_reader.LoadDeletedDocs(deleted_docs_ptr);
+                    if (!status.ok()) {
+                        LOG_ENGINE_ERROR_ << status.message();
+                        return status;
+                    }
+                    auto& deleted_docs = deleted_docs_ptr->GetDeletedDocs();
+
+                    auto deleted = std::find(deleted_docs.begin(), deleted_docs.end(), offset);
+                    if (deleted == deleted_docs.end()) {
+                        // Load raw vector
+                        bool is_binary = utils::IsBinaryMetricType(file.metric_type_);
+                        size_t single_vector_bytes = is_binary ? file.dimension_ / 8 : file.dimension_ * sizeof(float);
+                        std::vector<uint8_t> raw_vector;
+                        status =
+                            segment_reader.LoadVectors(offset * single_vector_bytes, single_vector_bytes, raw_vector);
+                        if (!status.ok()) {
+                            LOG_ENGINE_ERROR_ << status.message();
+                            return status;
+                        }
+
+                        std::unordered_map<std::string, std::vector<uint8_t>> raw_attrs;
+                        auto attr_it = attr_type.begin();
+                        for (; attr_it != attr_type.end(); attr_it++) {
+                            size_t num_bytes;
+                            switch (attr_it->second) {
+                                case engine::meta::hybrid::DataType::INT8: {
+                                    num_bytes = 1;
+                                    break;
+                                }
+                                case engine::meta::hybrid::DataType::INT16: {
+                                    num_bytes = 2;
+                                    break;
+                                }
+                                case engine::meta::hybrid::DataType::INT32: {
+                                    num_bytes = 4;
+                                    break;
+                                }
+                                case engine::meta::hybrid::DataType::INT64: {
+                                    num_bytes = 8;
+                                    break;
+                                }
+                                case engine::meta::hybrid::DataType::FLOAT: {
+                                    num_bytes = 4;
+                                    break;
+                                }
+                                case engine::meta::hybrid::DataType::DOUBLE: {
+                                    num_bytes = 8;
+                                    break;
+                                }
+                                default: {
+                                    std::string msg = "Field type of " + attr_it->first + " is wrong";
+                                    return Status{DB_ERROR, msg};
+                                }
+                            }
+                            std::vector<uint8_t> raw_attr;
+                            status = segment_reader.LoadAttrs(attr_it->first, offset * num_bytes, num_bytes, raw_attr);
+                            if (!status.ok()) {
+                                LOG_ENGINE_ERROR_ << status.message();
+                                return status;
+                            }
+                            raw_attrs.insert(std::make_pair(attr_it->first, raw_attr));
+                        }
+
+                        vector_ref.vector_count_ = 1;
+                        if (is_binary) {
+                            vector_ref.binary_data_.swap(raw_vector);
+                        } else {
+                            std::vector<float> float_vector;
+                            float_vector.resize(file.dimension_);
+                            memcpy(float_vector.data(), raw_vector.data(), single_vector_bytes);
+                            vector_ref.float_data_.swap(float_vector);
+                        }
+
+                        attr_ref.attr_count_ = 1;
+                        attr_ref.attr_data_ = raw_attrs;
+                        attr_ref.attr_type_ = attr_type;
+                        temp_ids.erase(it);
+                        continue;
+                    }
+                }
+            }
+            it++;
+        }
+
+        // unmark file, allow the file to be deleted
+        files_holder.UnmarkFile(file);
+    }
+
+    for (auto id : id_array) {
+        VectorsData& vector_ref = map_id2vector[id];
+
+        VectorsData data;
+        data.vector_count_ = vector_ref.vector_count_;
+        if (data.vector_count_ > 0) {
+            data.float_data_ = vector_ref.float_data_;    // copy data since there could be duplicated id
+            data.binary_data_ = vector_ref.binary_data_;  // copy data since there could be duplicated id
+        }
+        vectors.emplace_back(data);
+
+        attrs.emplace_back(map_id2attr[id]);
+    }
+
     if (vectors.empty()) {
         std::string msg = "Vectors not found in collection " + collection_id;
         LOG_ENGINE_DEBUG_ << msg;
@@ -1366,15 +1724,24 @@ DBImpl::CreateIndex(const std::shared_ptr<server::Context>& context, const std::
         return SHUTDOWN_ERROR;
     }
 
-    // serialize memory data
-    //    std::set<std::string> sync_collection_ids;
-    //    auto status = SyncMemData(sync_collection_ids);
+    // step 1: wait merge file thread finished to avoid duplicate data bug
     auto status = Flush();
+    WaitMergeFileFinish();  // let merge file thread finish
+
+    // merge all files for this collection, including its partitions
+    std::set<std::string> merge_collection_ids = {collection_id};
+    std::vector<meta::CollectionSchema> partition_array;
+    status = meta_ptr_->ShowPartitions(collection_id, partition_array);
+    for (auto& schema : partition_array) {
+        merge_collection_ids.insert(schema.collection_id_);
+    }
+    StartMergeTask(merge_collection_ids, true);  // start force-merge task
+    WaitMergeFileFinish();                       // let force-merge file thread finish
 
     {
         std::unique_lock<std::mutex> lock(build_index_mutex_);
 
-        // step 1: check index difference
+        // step 2: check index difference
         CollectionIndex old_index;
         status = DescribeIndex(collection_id, old_index);
         if (!status.ok()) {
@@ -1382,7 +1749,7 @@ DBImpl::CreateIndex(const std::shared_ptr<server::Context>& context, const std::
             return status;
         }
 
-        // step 2: update index info
+        // step 3: update index info
         CollectionIndex new_index = index;
         new_index.metric_type_ = old_index.metric_type_;  // dont change metric type, it was defined by CreateCollection
         if (!utils::IsSameIndex(old_index, new_index)) {
@@ -1392,10 +1759,6 @@ DBImpl::CreateIndex(const std::shared_ptr<server::Context>& context, const std::
             }
         }
     }
-
-    // step 3: let merge file thread finish
-    // to avoid duplicate data bug
-    WaitMergeFileFinish();
 
     // step 4: wait and build index
     status = index_failed_checker_.CleanFailedIndexFileOfCollection(collection_id);
@@ -1420,7 +1783,10 @@ DBImpl::DropIndex(const std::string& collection_id) {
     }
 
     LOG_ENGINE_DEBUG_ << "Drop index for collection: " << collection_id;
-    return DropCollectionIndexRecursively(collection_id);
+    auto status = DropCollectionIndexRecursively(collection_id);
+    std::set<std::string> merge_collection_ids = {collection_id};
+    StartMergeTask(merge_collection_ids, true);  // merge small files after drop index
+    return status;
 }
 
 Status
@@ -1461,7 +1827,7 @@ DBImpl::QueryByIDs(const std::shared_ptr<server::Context>& context, const std::s
 
     // get target vectors data
     std::vector<milvus::engine::VectorsData> vectors;
-    status = GetVectorsByID(collection_id, id_array, vectors);
+    status = GetVectorsByID(collection_schema, id_array, vectors);
     if (!status.ok()) {
         std::string msg = "Failed to get vector data for collection: " + collection_id;
         LOG_ENGINE_ERROR_ << msg;
@@ -1552,10 +1918,10 @@ DBImpl::QueryByIDs(const std::shared_ptr<server::Context>& context, const std::s
 
 Status
 DBImpl::HybridQuery(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
-                    const std::vector<std::string>& partition_tags,
-                    context::HybridSearchContextPtr hybrid_search_context, query::GeneralQueryPtr general_query,
-                    std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
-                    ResultIds& result_ids, ResultDistances& result_distances) {
+                    const std::vector<std::string>& partition_tags, query::GeneralQueryPtr general_query,
+                    query::QueryPtr query_ptr, std::vector<std::string>& field_names,
+                    std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+                    engine::QueryResult& result) {
     auto query_ctx = context->Child("Query");
 
     if (!initialized_.load(std::memory_order_acquire)) {
@@ -1605,8 +1971,8 @@ DBImpl::HybridQuery(const std::shared_ptr<server::Context>& context, const std::
     }
 
     cache::CpuCacheMgr::GetInstance()->PrintInfo();  // print cache info before query
-    status = HybridQueryAsync(query_ctx, collection_id, files_holder, hybrid_search_context, general_query, attr_type,
-                              nq, result_ids, result_distances);
+    status = HybridQueryAsync(query_ctx, collection_id, files_holder, general_query, query_ptr, field_names, attr_type,
+                              result);
     if (!status.ok()) {
         return status;
     }
@@ -1630,6 +1996,7 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
     Status status;
     meta::FilesHolder files_holder;
     if (partition_tags.empty()) {
+#if 0
         // no partition tag specified, means search in whole collection
         // get all collection files from parent collection
         status = meta_ptr_->FilesToSearch(collection_id, files_holder);
@@ -1642,11 +2009,33 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
         for (auto& schema : partition_array) {
             status = meta_ptr_->FilesToSearch(schema.collection_id_, files_holder);
         }
+#else
+        // no partition tag specified, means search in whole collection
+        // get files from root collection
+        status = meta_ptr_->FilesToSearch(collection_id, files_holder);
+        if (!status.ok()) {
+            return status;
+        }
+
+        // get files from partitions
+        std::set<std::string> partition_ids;
+        std::vector<meta::CollectionSchema> partition_array;
+        status = meta_ptr_->ShowPartitions(collection_id, partition_array);
+        for (auto& id : partition_array) {
+            partition_ids.insert(id.collection_id_);
+        }
+
+        status = meta_ptr_->FilesToSearchEx(collection_id, partition_ids, files_holder);
+        if (!status.ok()) {
+            return status;
+        }
+#endif
 
         if (files_holder.HoldFiles().empty()) {
             return Status::OK();  // no files to search
         }
     } else {
+#if 0
         // get files from specified partitions
         std::set<std::string> partition_name_array;
         status = GetPartitionsByTags(collection_id, partition_tags, partition_name_array);
@@ -1657,7 +2046,20 @@ DBImpl::Query(const std::shared_ptr<server::Context>& context, const std::string
         for (auto& partition_name : partition_name_array) {
             status = meta_ptr_->FilesToSearch(partition_name, files_holder);
         }
+#else
+        std::set<std::string> partition_name_array;
+        status = GetPartitionsByTags(collection_id, partition_tags, partition_name_array);
+        if (!status.ok()) {
+            return status;  // didn't match any partition.
+        }
 
+        std::set<std::string> partition_ids;
+        for (auto& partition_name : partition_name_array) {
+            partition_ids.insert(partition_name);
+        }
+
+        status = meta_ptr_->FilesToSearchEx(collection_id, partition_ids, files_holder);
+#endif
         if (files_holder.HoldFiles().empty()) {
             return Status::OK();  // no files to search
         }
@@ -1766,11 +2168,11 @@ DBImpl::QueryAsync(const std::shared_ptr<server::Context>& context, meta::FilesH
 }
 
 Status
-DBImpl::HybridQueryAsync(const std::shared_ptr<server::Context>& context, const std::string& table_id,
-                         meta::FilesHolder& files_holder, context::HybridSearchContextPtr hybrid_search_context,
-                         query::GeneralQueryPtr general_query,
-                         std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
-                         ResultIds& result_ids, ResultDistances& result_distances) {
+DBImpl::HybridQueryAsync(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                         meta::FilesHolder& files_holder, query::GeneralQueryPtr general_query,
+                         query::QueryPtr query_ptr, std::vector<std::string>& field_names,
+                         std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+                         engine::QueryResult& result) {
     auto query_async_ctx = context->Child("Query Async");
 
 #if 0
@@ -1789,10 +2191,8 @@ DBImpl::HybridQueryAsync(const std::shared_ptr<server::Context>& context, const 
         search::TaskInst::GetInstance().load_cv().notify_one();
         hybrid_search_context->tasks_.emplace_back(task);
     }
-
 #endif
 
-    //#if 0
     TimeRecorder rc("");
 
     // step 1: construct search job
@@ -1800,7 +2200,7 @@ DBImpl::HybridQueryAsync(const std::shared_ptr<server::Context>& context, const 
     milvus::engine::meta::SegmentsSchema& files = files_holder.HoldFiles();
     LOG_ENGINE_DEBUG_ << LogOut("Engine query begin, index file count: %ld", files_holder.HoldFiles().size());
     scheduler::SearchJobPtr job =
-        std::make_shared<scheduler::SearchJob>(query_async_ctx, general_query, attr_type, vectors);
+        std::make_shared<scheduler::SearchJob>(query_async_ctx, general_query, query_ptr, attr_type, vectors);
     for (auto& file : files) {
         scheduler::SegmentSchemaPtr file_ptr = std::make_shared<meta::SegmentSchema>(file);
         job->AddIndexFile(file_ptr);
@@ -1816,19 +2216,44 @@ DBImpl::HybridQueryAsync(const std::shared_ptr<server::Context>& context, const 
     }
 
     // step 3: construct results
-    nq = job->vector_count();
-    result_ids = job->GetResultIds();
-    result_distances = job->GetResultDistances();
+    result.row_num_ = job->vector_count();
+    result.result_ids_ = job->GetResultIds();
+    result.result_distances_ = job->GetResultDistances();
+
+    // step 4: get entities by result ids
+    auto status = GetEntitiesByID(collection_id, result.result_ids_, result.vectors_, result.attrs_);
+    if (!status.ok()) {
+        query_async_ctx->GetTraceContext()->GetSpan()->Finish();
+        return status;
+    }
+
+    // step 5: filter entities by field names
+    std::vector<engine::AttrsData> filter_attrs;
+    for (auto attr : result.attrs_) {
+        AttrsData attrs_data;
+        attrs_data.attr_type_ = attr.attr_type_;
+        attrs_data.attr_count_ = attr.attr_count_;
+        attrs_data.id_array_ = attr.id_array_;
+        for (auto& name : field_names) {
+            if (attr.attr_data_.find(name) != attr.attr_data_.end()) {
+                attrs_data.attr_data_.insert(std::make_pair(name, attr.attr_data_.at(name)));
+            }
+        }
+        filter_attrs.emplace_back(attrs_data);
+    }
+
+    result.attrs_ = filter_attrs;
+
     rc.ElapseFromBegin("Engine query totally cost");
 
     query_async_ctx->GetTraceContext()->GetSpan()->Finish();
-    //#endif
 
     return Status::OK();
 }
 
 void
 DBImpl::BackgroundIndexThread() {
+    SetThreadName("index_thread");
     server::SystemInfo::GetInstance().Init();
     while (true) {
         if (!initialized_.load(std::memory_order_acquire)) {
@@ -1897,7 +2322,7 @@ DBImpl::StartMetricTask() {
 }
 
 void
-DBImpl::StartMergeTask() {
+DBImpl::StartMergeTask(const std::set<std::string>& merge_collection_ids, bool force_merge_all) {
     // LOG_ENGINE_DEBUG_ << "Begin StartMergeTask";
     // merge task has been finished?
     {
@@ -1914,131 +2339,126 @@ DBImpl::StartMergeTask() {
     {
         std::lock_guard<std::mutex> lck(merge_result_mutex_);
         if (merge_thread_results_.empty()) {
-            // collect merge files for all collections(if merge_collection_ids_ is empty) for two reasons:
-            // 1. other collections may still has un-merged files
-            // 2. server may be closed unexpected, these un-merge files need to be merged when server restart
-            if (merge_collection_ids_.empty()) {
-                std::vector<meta::CollectionSchema> collection_schema_array;
-                meta_ptr_->AllCollections(collection_schema_array);
-                for (auto& schema : collection_schema_array) {
-                    merge_collection_ids_.insert(schema.collection_id_);
-                }
-            }
-
             // start merge file thread
             merge_thread_results_.push_back(
-                merge_thread_pool_.enqueue(&DBImpl::BackgroundMerge, this, merge_collection_ids_));
-            merge_collection_ids_.clear();
+                merge_thread_pool_.enqueue(&DBImpl::BackgroundMerge, this, merge_collection_ids, force_merge_all));
         }
     }
 
     // LOG_ENGINE_DEBUG_ << "End StartMergeTask";
 }
 
-Status
-DBImpl::MergeHybridFiles(const std::string& collection_id, meta::FilesHolder& files_holder) {
-    // const std::lock_guard<std::mutex> lock(flush_merge_compact_mutex_);
-
-    LOG_ENGINE_DEBUG_ << "Merge files for collection: " << collection_id;
-
-    // step 1: create table file
-    meta::SegmentSchema table_file;
-    table_file.collection_id_ = collection_id;
-    table_file.file_type_ = meta::SegmentSchema::NEW_MERGE;
-    Status status = meta_ptr_->CreateHybridCollectionFile(table_file);
-
-    if (!status.ok()) {
-        LOG_ENGINE_ERROR_ << "Failed to create collection: " << status.ToString();
-        return status;
-    }
-
-    // step 2: merge files
-    /*
-    ExecutionEnginePtr index =
-        EngineFactory::Build(table_file.dimension_, table_file.location_, (EngineType)table_file.engine_type_,
-                             (MetricType)table_file.metric_type_, table_file.nlist_);
-*/
-    meta::SegmentsSchema updated;
-
-    std::string new_segment_dir;
-    utils::GetParentPath(table_file.location_, new_segment_dir);
-    auto segment_writer_ptr = std::make_shared<segment::SegmentWriter>(new_segment_dir);
-
-    // attention: here is a copy, not reference, since files_holder.UnmarkFile will change the array internal
-    milvus::engine::meta::SegmentsSchema files = files_holder.HoldFiles();
-    for (auto& file : files) {
-        server::CollectMergeFilesMetrics metrics;
-        std::string segment_dir_to_merge;
-        utils::GetParentPath(file.location_, segment_dir_to_merge);
-        segment_writer_ptr->Merge(segment_dir_to_merge, table_file.file_id_);
-
-        files_holder.UnmarkFile(file);
-
-        auto file_schema = file;
-        file_schema.file_type_ = meta::SegmentSchema::TO_DELETE;
-        updated.push_back(file_schema);
-        auto size = segment_writer_ptr->Size();
-        if (size >= file_schema.index_file_size_) {
-            break;
-        }
-    }
-
-    // step 3: serialize to disk
-    try {
-        status = segment_writer_ptr->Serialize();
-        fiu_do_on("DBImpl.MergeFiles.Serialize_ThrowException", throw std::exception());
-        fiu_do_on("DBImpl.MergeFiles.Serialize_ErrorStatus", status = Status(DB_ERROR, ""));
-    } catch (std::exception& ex) {
-        std::string msg = "Serialize merged index encounter exception: " + std::string(ex.what());
-        LOG_ENGINE_ERROR_ << msg;
-        status = Status(DB_ERROR, msg);
-    }
-
-    if (!status.ok()) {
-        LOG_ENGINE_ERROR_ << "Failed to persist merged segment: " << new_segment_dir << ". Error: " << status.message();
-
-        // if failed to serialize merge file to disk
-        // typical error: out of disk space, out of memory or permission denied
-        table_file.file_type_ = meta::SegmentSchema::TO_DELETE;
-        status = meta_ptr_->UpdateCollectionFile(table_file);
-        LOG_ENGINE_DEBUG_ << "Failed to update file to index, mark file: " << table_file.file_id_ << " to to_delete";
-
-        return status;
-    }
-
-    // step 4: update table files state
-    // if index type isn't IDMAP, set file type to TO_INDEX if file size exceed index_file_size
-    // else set file type to RAW, no need to build index
-    if (!utils::IsRawIndexType(table_file.engine_type_)) {
-        table_file.file_type_ = (segment_writer_ptr->Size() >= table_file.index_file_size_)
-                                    ? meta::SegmentSchema::TO_INDEX
-                                    : meta::SegmentSchema::RAW;
-    } else {
-        table_file.file_type_ = meta::SegmentSchema::RAW;
-    }
-    table_file.file_size_ = segment_writer_ptr->Size();
-    table_file.row_count_ = segment_writer_ptr->VectorCount();
-    updated.push_back(table_file);
-    status = meta_ptr_->UpdateCollectionFiles(updated);
-    LOG_ENGINE_DEBUG_ << "New merged segment " << table_file.segment_id_ << " of size " << segment_writer_ptr->Size()
-                      << " bytes";
-
-    if (options_.insert_cache_immediately_) {
-        segment_writer_ptr->Cache();
-    }
-
-    return status;
-}
+// Status
+// DBImpl::MergeHybridFiles(const std::string& collection_id, meta::FilesHolder& files_holder) {
+//    // const std::lock_guard<std::mutex> lock(flush_merge_compact_mutex_);
+//
+//    LOG_ENGINE_DEBUG_ << "Merge files for collection: " << collection_id;
+//
+//    // step 1: create table file
+//    meta::SegmentSchema table_file;
+//    table_file.collection_id_ = collection_id;
+//    table_file.file_type_ = meta::SegmentSchema::NEW_MERGE;
+//    Status status = meta_ptr_->CreateHybridCollectionFile(table_file);
+//
+//    if (!status.ok()) {
+//        LOG_ENGINE_ERROR_ << "Failed to create collection: " << status.ToString();
+//        return status;
+//    }
+//
+//    // step 2: merge files
+//    /*
+//    ExecutionEnginePtr index =
+//        EngineFactory::Build(table_file.dimension_, table_file.location_, (EngineType)table_file.engine_type_,
+//                             (MetricType)table_file.metric_type_, table_file.nlist_);
+//*/
+//    meta::SegmentsSchema updated;
+//
+//    std::string new_segment_dir;
+//    utils::GetParentPath(table_file.location_, new_segment_dir);
+//    auto segment_writer_ptr = std::make_shared<segment::SegmentWriter>(new_segment_dir);
+//
+//    // attention: here is a copy, not reference, since files_holder.UnmarkFile will change the array internal
+//    milvus::engine::meta::SegmentsSchema files = files_holder.HoldFiles();
+//    for (auto& file : files) {
+//        server::CollectMergeFilesMetrics metrics;
+//        std::string segment_dir_to_merge;
+//        utils::GetParentPath(file.location_, segment_dir_to_merge);
+//        segment_writer_ptr->Merge(segment_dir_to_merge, table_file.file_id_);
+//
+//        files_holder.UnmarkFile(file);
+//
+//        auto file_schema = file;
+//        file_schema.file_type_ = meta::SegmentSchema::TO_DELETE;
+//        updated.push_back(file_schema);
+//        int64_t size = segment_writer_ptr->Size();
+//        if (size >= file_schema.index_file_size_) {
+//            break;
+//        }
+//    }
+//
+//    // step 3: serialize to disk
+//    try {
+//        status = segment_writer_ptr->Serialize();
+//        fiu_do_on("DBImpl.MergeFiles.Serialize_ThrowException", throw std::exception());
+//        fiu_do_on("DBImpl.MergeFiles.Serialize_ErrorStatus", status = Status(DB_ERROR, ""));
+//    } catch (std::exception& ex) {
+//        std::string msg = "Serialize merged index encounter exception: " + std::string(ex.what());
+//        LOG_ENGINE_ERROR_ << msg;
+//        status = Status(DB_ERROR, msg);
+//    }
+//
+//    if (!status.ok()) {
+//        LOG_ENGINE_ERROR_ << "Failed to persist merged segment: " << new_segment_dir << ". Error: " <<
+//        status.message();
+//
+//        // if failed to serialize merge file to disk
+//        // typical error: out of disk space, out of memory or permission denied
+//        table_file.file_type_ = meta::SegmentSchema::TO_DELETE;
+//        status = meta_ptr_->UpdateCollectionFile(table_file);
+//        LOG_ENGINE_DEBUG_ << "Failed to update file to index, mark file: " << table_file.file_id_ << " to to_delete";
+//
+//        return status;
+//    }
+//
+//    // step 4: update table files state
+//    // if index type isn't IDMAP, set file type to TO_INDEX if file size exceed index_file_size
+//    // else set file type to RAW, no need to build index
+//    if (!utils::IsRawIndexType(table_file.engine_type_)) {
+//        table_file.file_type_ = (segment_writer_ptr->Size() >= (size_t)(table_file.index_file_size_))
+//                                    ? meta::SegmentSchema::TO_INDEX
+//                                    : meta::SegmentSchema::RAW;
+//    } else {
+//        table_file.file_type_ = meta::SegmentSchema::RAW;
+//    }
+//    table_file.file_size_ = segment_writer_ptr->Size();
+//    table_file.row_count_ = segment_writer_ptr->VectorCount();
+//    updated.push_back(table_file);
+//    status = meta_ptr_->UpdateCollectionFiles(updated);
+//    LOG_ENGINE_DEBUG_ << "New merged segment " << table_file.segment_id_ << " of size " << segment_writer_ptr->Size()
+//                      << " bytes";
+//
+//    if (options_.insert_cache_immediately_) {
+//        segment_writer_ptr->Cache();
+//    }
+//
+//    return status;
+//}
 
 void
-DBImpl::BackgroundMerge(std::set<std::string> collection_ids) {
+DBImpl::BackgroundMerge(std::set<std::string> collection_ids, bool force_merge_all) {
     // LOG_ENGINE_TRACE_ << " Background merge thread start";
 
     Status status;
     for (auto& collection_id : collection_ids) {
         const std::lock_guard<std::mutex> lock(flush_merge_compact_mutex_);
 
+        auto old_strategy = merge_mgr_ptr_->Strategy();
+        if (force_merge_all) {
+            merge_mgr_ptr_->UseStrategy(MergeStrategyType::ADAPTIVE);
+        }
+
         auto status = merge_mgr_ptr_->MergeFiles(collection_id);
+        merge_mgr_ptr_->UseStrategy(old_strategy);
         if (!status.ok()) {
             LOG_ENGINE_ERROR_ << "Failed to get merge files for collection: " << collection_id
                               << " reason:" << status.message();
@@ -2050,7 +2470,7 @@ DBImpl::BackgroundMerge(std::set<std::string> collection_ids) {
         }
     }
 
-    meta_ptr_->Archive();
+    //    meta_ptr_->Archive();
 
     {
         uint64_t timeout = (options_.file_cleanup_timeout_ >= 0) ? options_.file_cleanup_timeout_ : 10;
@@ -2089,7 +2509,7 @@ DBImpl::BackgroundBuildIndex() {
     meta::FilesHolder files_holder;
     meta_ptr_->FilesToIndex(files_holder);
 
-    milvus::engine::meta::SegmentsSchema& to_index_files = files_holder.HoldFiles();
+    milvus::engine::meta::SegmentsSchema to_index_files = files_holder.HoldFiles();
     Status status = index_failed_checker_.IgnoreFailedIndexFiles(to_index_files);
 
     if (!to_index_files.empty()) {
@@ -2106,10 +2526,12 @@ DBImpl::BackgroundBuildIndex() {
         }
 
         // step 3: wait build index finished and mark failed files
+        int64_t completed = 0;
         for (auto iter = job2file_map.begin(); iter != job2file_map.end(); ++iter) {
             scheduler::BuildIndexJobPtr job = iter->first;
             meta::SegmentSchema& file_schema = *(iter->second.get());
             job->WaitBuildIndexFinish();
+            LOG_ENGINE_INFO_ << "Build Index Progress: " << ++completed << " of " << job2file_map.size();
             if (!job->GetStatus().ok()) {
                 Status status = job->GetStatus();
                 LOG_ENGINE_ERROR_ << "Building index job " << job->id() << " failed: " << status.ToString();
@@ -2211,39 +2633,6 @@ DBImpl::GetPartitionsByTags(const std::string& collection_id, const std::vector<
 }
 
 Status
-DBImpl::DropCollectionRecursively(const std::string& collection_id) {
-    // dates partly delete files of the collection but currently we don't support
-    LOG_ENGINE_DEBUG_ << "Prepare to delete collection " << collection_id;
-
-    Status status;
-    if (options_.wal_enable_) {
-        wal_mgr_->DropCollection(collection_id);
-    }
-
-    status = mem_mgr_->EraseMemVector(collection_id);   // not allow insert
-    status = meta_ptr_->DropCollection(collection_id);  // soft delete collection
-    index_failed_checker_.CleanFailedIndexFileOfCollection(collection_id);
-
-    // scheduler will determine when to delete collection files
-    auto nres = scheduler::ResMgrInst::GetInstance()->GetNumOfComputeResource();
-    scheduler::DeleteJobPtr job = std::make_shared<scheduler::DeleteJob>(collection_id, meta_ptr_, nres);
-    scheduler::JobMgrInst::GetInstance()->Put(job);
-    job->WaitAndDelete();
-
-    std::vector<meta::CollectionSchema> partition_array;
-    status = meta_ptr_->ShowPartitions(collection_id, partition_array);
-    for (auto& schema : partition_array) {
-        status = DropCollectionRecursively(schema.collection_id_);
-        fiu_do_on("DBImpl.DropCollectionRecursively.failed", status = Status(DB_ERROR, ""));
-        if (!status.ok()) {
-            return status;
-        }
-    }
-
-    return Status::OK();
-}
-
-Status
 DBImpl::UpdateCollectionIndexRecursively(const std::string& collection_id, const CollectionIndex& index) {
     DropIndex(collection_id);
 
@@ -2307,7 +2696,7 @@ DBImpl::WaitCollectionIndexRecursively(const std::shared_ptr<server::Context>& c
             index_req_swn_.Wait_For(std::chrono::seconds(1));
 
             // client break the connection, no need to block, check every 1 second
-            if (context->IsConnectionBroken()) {
+            if (context && context->IsConnectionBroken()) {
                 LOG_ENGINE_DEBUG_ << "Client connection broken, build index in background";
                 break;  // just break, not return, continue to update partitions files to to_index
             }
@@ -2400,28 +2789,38 @@ Status
 DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
     fiu_return_on("DBImpl.ExexWalRecord.return", Status(););
 
-    auto collections_flushed = [&](const std::set<std::string>& collection_ids) -> uint64_t {
-        if (collection_ids.empty()) {
-            return 0;
-        }
-
+    auto collections_flushed = [&](const std::string collection_id,
+                                   const std::set<std::string>& target_collection_names) -> uint64_t {
         uint64_t max_lsn = 0;
         if (options_.wal_enable_) {
-            for (auto& collection : collection_ids) {
-                uint64_t lsn = 0;
+            uint64_t lsn = 0;
+            for (auto& collection : target_collection_names) {
                 meta_ptr_->GetCollectionFlushLSN(collection, lsn);
-                wal_mgr_->CollectionFlushed(collection, lsn);
                 if (lsn > max_lsn) {
                     max_lsn = lsn;
                 }
             }
+            wal_mgr_->CollectionFlushed(collection_id, lsn);
         }
 
-        std::lock_guard<std::mutex> lck(merge_result_mutex_);
-        for (auto& collection : collection_ids) {
-            merge_collection_ids_.insert(collection);
+        std::set<std::string> merge_collection_ids;
+        for (auto& collection : target_collection_names) {
+            merge_collection_ids.insert(collection);
         }
+        StartMergeTask(merge_collection_ids);
         return max_lsn;
+    };
+
+    auto partition_flushed = [&](const std::string& collection_id, const std::string& partition,
+                                 const std::string& target_collection_name) {
+        if (options_.wal_enable_) {
+            uint64_t lsn = 0;
+            meta_ptr_->GetCollectionFlushLSN(target_collection_name, lsn);
+            wal_mgr_->PartitionFlushed(collection_id, partition, lsn);
+        }
+
+        std::set<std::string> merge_collection_ids = {target_collection_name};
+        StartMergeTask(merge_collection_ids);
     };
 
     Status status;
@@ -2440,7 +2839,9 @@ DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
                                               (record.data_size / record.length / sizeof(float)),
                                               (const float*)record.data, record.attr_nbytes, record.attr_data_size,
                                               record.attr_data, record.lsn, flushed_collections);
-            collections_flushed(flushed_collections);
+            if (!flushed_collections.empty()) {
+                partition_flushed(record.collection_id, record.partition_tag, target_collection_name);
+            }
 
             milvus::server::CollectInsertMetrics metrics(record.length, status);
             break;
@@ -2458,7 +2859,9 @@ DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
                                              (record.data_size / record.length / sizeof(uint8_t)),
                                              (const u_int8_t*)record.data, record.lsn, flushed_collections);
             // even though !status.ok, run
-            collections_flushed(flushed_collections);
+            if (!flushed_collections.empty()) {
+                partition_flushed(record.collection_id, record.partition_tag, target_collection_name);
+            }
 
             // metrics
             milvus::server::CollectInsertMetrics metrics(record.length, status);
@@ -2478,7 +2881,9 @@ DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
                                              (record.data_size / record.length / sizeof(float)),
                                              (const float*)record.data, record.lsn, flushed_collections);
             // even though !status.ok, run
-            collections_flushed(flushed_collections);
+            if (!flushed_collections.empty()) {
+                partition_flushed(record.collection_id, record.partition_tag, target_collection_name);
+            }
 
             // metrics
             milvus::server::CollectInsertMetrics metrics(record.length, status);
@@ -2541,7 +2946,7 @@ DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
                     flushed_collections.insert(collection_id);
                 }
 
-                collections_flushed(flushed_collections);
+                collections_flushed(record.collection_id, flushed_collections);
 
             } else {
                 // flush all collections
@@ -2551,13 +2956,16 @@ DBImpl::ExecWalRecord(const wal::MXLogRecord& record) {
                     status = mem_mgr_->Flush(collection_ids);
                 }
 
-                uint64_t lsn = collections_flushed(collection_ids);
+                uint64_t lsn = collections_flushed("", collection_ids);
                 if (options_.wal_enable_) {
                     wal_mgr_->RemoveOldFiles(lsn);
                 }
             }
             break;
         }
+
+        default:
+            break;
     }
 
     return status;
@@ -2569,8 +2977,6 @@ DBImpl::InternalFlush(const std::string& collection_id) {
     record.type = wal::MXLogType::Flush;
     record.collection_id = collection_id;
     ExecWalRecord(record);
-
-    StartMergeTask();
 }
 
 void
@@ -2653,6 +3059,7 @@ DBImpl::BackgroundFlushThread() {
 
 void
 DBImpl::BackgroundMetricThread() {
+    SetThreadName("metric_thread");
     server::SystemInfo::GetInstance().Init();
     while (true) {
         if (!initialized_.load(std::memory_order_acquire)) {

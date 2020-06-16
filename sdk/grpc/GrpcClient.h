@@ -115,7 +115,13 @@ class GrpcClient {
     InsertEntities(milvus::grpc::HInsertParam& entities, milvus::grpc::HEntityIDs& ids);
 
     Status
-    HybridSearch(milvus::grpc::HSearchParam& search_param, milvus::grpc::TopKQueryResult& result);
+    HybridSearchPB(milvus::grpc::HSearchParamPB& search_param, milvus::grpc::HQueryResult& result);
+
+    Status
+    HybridSearch(milvus::grpc::HSearchParam& search_param, milvus::grpc::HQueryResult& result);
+
+    Status
+    GetHEntityByID(milvus::grpc::VectorsIdentity& vectors_identity, milvus::grpc::HEntity& entity);
 
  private:
     std::unique_ptr<grpc::MilvusService::Stub> stub_;

@@ -16,6 +16,7 @@
 
 #include <iostream>
 #include <memory>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -72,31 +73,50 @@ Utils::GenCollectionName() {
 std::string
 Utils::MetricTypeName(const milvus::MetricType& metric_type) {
     switch (metric_type) {
-        case milvus::MetricType::L2:return "L2 distance";
-        case milvus::MetricType::IP:return "Inner product";
-        case milvus::MetricType::HAMMING:return "Hamming distance";
-        case milvus::MetricType::JACCARD:return "Jaccard distance";
-        case milvus::MetricType::TANIMOTO:return "Tanimoto distance";
-        case milvus::MetricType::SUBSTRUCTURE:return "Substructure distance";
-        case milvus::MetricType::SUPERSTRUCTURE:return "Superstructure distance";
-        default:return "Unknown metric type";
+        case milvus::MetricType::L2:
+            return "L2 distance";
+        case milvus::MetricType::IP:
+            return "Inner product";
+        case milvus::MetricType::HAMMING:
+            return "Hamming distance";
+        case milvus::MetricType::JACCARD:
+            return "Jaccard distance";
+        case milvus::MetricType::TANIMOTO:
+            return "Tanimoto distance";
+        case milvus::MetricType::SUBSTRUCTURE:
+            return "Substructure distance";
+        case milvus::MetricType::SUPERSTRUCTURE:
+            return "Superstructure distance";
+        default:
+            return "Unknown metric type";
     }
 }
 
 std::string
 Utils::IndexTypeName(const milvus::IndexType& index_type) {
     switch (index_type) {
-        case milvus::IndexType::FLAT:return "FLAT";
-        case milvus::IndexType::IVFFLAT:return "IVFFLAT";
-        case milvus::IndexType::IVFSQ8:return "IVFSQ8";
-        case milvus::IndexType::RNSG:return "NSG";
-        case milvus::IndexType::IVFSQ8H:return "IVFSQ8H";
-        case milvus::IndexType::IVFPQ:return "IVFPQ";
-        case milvus::IndexType::SPTAGKDT:return "SPTAGKDT";
-        case milvus::IndexType::SPTAGBKT:return "SPTAGBKT";
-        case milvus::IndexType::HNSW:return "HNSW";
-        case milvus::IndexType::ANNOY:return "ANNOY";
-        default:return "Unknown index type";
+        case milvus::IndexType::FLAT:
+            return "FLAT";
+        case milvus::IndexType::IVFFLAT:
+            return "IVFFLAT";
+        case milvus::IndexType::IVFSQ8:
+            return "IVFSQ8";
+        case milvus::IndexType::RNSG:
+            return "NSG";
+        case milvus::IndexType::IVFSQ8H:
+            return "IVFSQ8H";
+        case milvus::IndexType::IVFPQ:
+            return "IVFPQ";
+        case milvus::IndexType::SPTAGKDT:
+            return "SPTAGKDT";
+        case milvus::IndexType::SPTAGBKT:
+            return "SPTAGBKT";
+        case milvus::IndexType::HNSW:
+            return "HNSW";
+        case milvus::IndexType::ANNOY:
+            return "ANNOY";
+        default:
+            return "Unknown index type";
     }
 }
 
@@ -136,11 +156,13 @@ Utils::BuildEntities(int64_t from, int64_t to, std::vector<milvus::Entity>& enti
 
     entity_array.clear();
     entity_ids.clear();
+    std::default_random_engine e;
+    std::uniform_real_distribution<float> u(0, 1);
     for (int64_t k = from; k < to; k++) {
         milvus::Entity entity;
         entity.float_data.resize(dimension);
         for (int64_t i = 0; i < dimension; i++) {
-            entity.float_data[i] = (float)((k + 100) % (i + 1));
+            entity.float_data[i] = (u(e));
         }
 
         entity_array.emplace_back(entity);
@@ -214,13 +236,8 @@ Utils::DoSearch(std::shared_ptr<milvus::Connection> conn, const std::string& col
         BLOCK_SPLITER
         JSON json_params = {{"nprobe", nprobe}};
         milvus_sdk::TimeRecorder rc("Search");
-        milvus::Status stat =
-            conn->Search(collection_name,
-                         partition_tags,
-                         temp_entity_array,
-                         top_k,
-                         json_params.dump(),
-                         topk_query_result);
+        milvus::Status stat = conn->Search(collection_name, partition_tags, temp_entity_array, top_k,
+                                           json_params.dump(), topk_query_result);
         std::cout << "Search function call status: " << stat.message() << std::endl;
         BLOCK_SPLITER
     }
@@ -229,39 +246,40 @@ Utils::DoSearch(std::shared_ptr<milvus::Connection> conn, const std::string& col
     CheckSearchResult(entity_array, topk_query_result);
 }
 
-void ConstructVector(uint64_t nq, uint64_t dimension, std::vector<milvus::Entity>& query_vector) {
+void
+Utils::ConstructVector(uint64_t nq, uint64_t dimension, std::vector<milvus::Entity>& query_vector) {
     query_vector.resize(nq);
+    std::default_random_engine e;
+    std::uniform_real_distribution<float> u(0, 1);
     for (uint64_t i = 0; i < nq; ++i) {
         query_vector[i].float_data.resize(dimension);
         for (uint64_t j = 0; j < dimension; ++j) {
-            query_vector[i].float_data[j] = (float)((i + 100) / (j + 1));
+            query_vector[i].float_data[j] = u(e);
         }
     }
 }
 
 std::vector<milvus::LeafQueryPtr>
 Utils::GenLeafQuery() {
-    //Construct TermQuery
-    uint64_t row_num = 1000;
+    // Construct TermQuery
+    uint64_t row_num = 10000;
     std::vector<int64_t> field_value;
     field_value.resize(row_num);
     for (uint64_t i = 0; i < row_num; ++i) {
         field_value[i] = i;
     }
-    std::vector<int8_t> term_value(row_num * sizeof(int64_t));
-    memcpy(term_value.data(), field_value.data(), row_num * sizeof(int64_t));
     milvus::TermQueryPtr tq = std::make_shared<milvus::TermQuery>();
     tq->field_name = "field_1";
-    tq->field_value = term_value;
+    tq->int_value = field_value;
 
-    //Construct RangeQuery
-    milvus::CompareExpr ce1 = {milvus::CompareOperator::LTE, "10000"}, ce2 = {milvus::CompareOperator::GTE, "1"};
+    // Construct RangeQuery
+    milvus::CompareExpr ce1 = {milvus::CompareOperator::LTE, "100000"}, ce2 = {milvus::CompareOperator::GTE, "1"};
     std::vector<milvus::CompareExpr> ces{ce1, ce2};
     milvus::RangeQueryPtr rq = std::make_shared<milvus::RangeQuery>();
     rq->field_name = "field_2";
     rq->compare_expr = ces;
 
-    //Construct VectorQuery
+    // Construct VectorQuery
     uint64_t NQ = 10;
     uint64_t DIMENSION = 128;
     uint64_t NPROBE = 32;
@@ -271,7 +289,6 @@ Utils::GenLeafQuery() {
     vq->topk = 10;
     JSON json_params = {{"nprobe", NPROBE}};
     vq->extra_params = json_params.dump();
-
 
     std::vector<milvus::LeafQueryPtr> lq;
     milvus::LeafQueryPtr lq1 = std::make_shared<milvus::LeafQuery>();
@@ -288,6 +305,64 @@ Utils::GenLeafQuery() {
     lq2->query_boost = 2.0;
     lq3->query_boost = 3.0;
     return lq;
+}
+
+void
+Utils::GenDSLJson(nlohmann::json& dsl_json, nlohmann::json& vector_param_json) {
+    uint64_t row_num = 10000;
+    std::vector<int64_t> term_value;
+    term_value.resize(row_num);
+    for (uint64_t i = 0; i < row_num; ++i) {
+        term_value[i] = i;
+    }
+
+    nlohmann::json bool_json, term_json, range_json, vector_json;
+    term_json["term"]["field_name"] = "field_1";
+    term_json["term"]["values"] = term_value;
+    bool_json["must"].push_back(term_json);
+
+    range_json["range"]["field_name"] = "field_1";
+    nlohmann::json comp_json;
+    comp_json["gte"] = "0";
+    comp_json["lte"] = "100000";
+    range_json["range"]["values"] = comp_json;
+    bool_json["must"].push_back(range_json);
+
+    std::string placeholder = "placeholder_1";
+    vector_json["vector"] = placeholder;
+    bool_json["must"].push_back(vector_json);
+
+    dsl_json["bool"] = bool_json;
+
+    nlohmann::json vector_extra_params;
+    int64_t topk = 10;
+    vector_param_json[placeholder]["field_name"] = "field_3";
+    vector_param_json[placeholder]["topk"] = topk;
+    vector_extra_params["nprobe"] = 64;
+    vector_param_json[placeholder]["params"] = vector_extra_params;
+}
+
+void
+Utils::PrintTopKHybridQueryResult(milvus::TopKHybridQueryResult& topk_query_result) {
+    for (uint64_t i = 0; i < topk_query_result.size(); i++) {
+        for (auto attr : topk_query_result[i].attr_records) {
+            std::cout << "Field: " << attr.first << std::endl;
+            if (attr.second.int_record.size() > 0) {
+                for (auto record : attr.second.int_record) {
+                    std::cout << record << "\t";
+                }
+            } else if (attr.second.double_record.size() > 0) {
+                for (auto record : attr.second.double_record) {
+                    std::cout << record << "\t";
+                }
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    for (uint64_t i = 0; i < topk_query_result.size(); ++i) {
+        std::cout << topk_query_result[i].ids[1] << "  ---------  " << topk_query_result[i].distances[1] << std::endl;
+    }
 }
 
 }  // namespace milvus_sdk

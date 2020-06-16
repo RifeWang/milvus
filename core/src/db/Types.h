@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "db/engine/ExecutionEngine.h"
+#include "db/meta/MetaTypes.h"
 #include "segment/Types.h"
 #include "utils/Json.h"
 
@@ -38,7 +39,7 @@ typedef std::vector<faiss::Index::distance_t> ResultDistances;
 struct CollectionIndex {
     int32_t engine_type_ = (int)EngineType::FAISS_IDMAP;
     int32_t metric_type_ = (int)MetricType::L2;
-    milvus::json extra_params_ = {{"nlist", 16384}};
+    milvus::json extra_params_ = {{"nlist", 2048}};
 };
 
 struct VectorsData {
@@ -51,15 +52,27 @@ struct VectorsData {
 struct Entity {
     uint64_t entity_count_ = 0;
     std::vector<uint8_t> attr_value_;
-    std::unordered_map<std::string, std::vector<std::string>> attr_data_;
     std::unordered_map<std::string, VectorsData> vector_data_;
     IDNumbers id_array_;
 };
 
+struct AttrsData {
+    uint64_t attr_count_ = 0;
+    std::unordered_map<std::string, engine::meta::hybrid::DataType> attr_type_;
+    std::unordered_map<std::string, std::vector<uint8_t>> attr_data_;
+    IDNumbers id_array_;
+};
+
+struct QueryResult {
+    uint64_t row_num_;
+    engine::ResultIds result_ids_;
+    engine::ResultDistances result_distances_;
+    std::vector<engine::VectorsData> vectors_;
+    std::vector<engine::AttrsData> attrs_;
+};
+
 using File2ErrArray = std::map<std::string, std::vector<std::string>>;
 using Table2FileErr = std::map<std::string, File2ErrArray>;
-
-static const char* DEFAULT_PARTITON_TAG = "_default";
 
 }  // namespace engine
 }  // namespace milvus

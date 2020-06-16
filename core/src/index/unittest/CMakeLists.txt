@@ -80,6 +80,7 @@ if (NOT TARGET test_instructionset)
     add_executable(test_instructionset test_instructionset.cpp)
 endif ()
 target_link_libraries(test_instructionset ${depend_libs} ${unittest_libs})
+install(TARGETS test_instructionset DESTINATION unittest)
 
 ################################################################################
 #<KNOWHERE-COMMON-TEST>
@@ -198,6 +199,16 @@ endif ()
 target_link_libraries(test_annoy ${depend_libs} ${unittest_libs} ${basic_libs})
 install(TARGETS test_annoy DESTINATION unittest)
 
+################################################################################
+#<STRUCTURED-INDEX-SORT-TEST>
+set(structured_index_sort_srcs
+        ${INDEX_SOURCE_DIR}/knowhere/knowhere/index/structured_index/StructuredIndexSort-inl.h
+        )
+if (NOT TARGET test_structured_index_sort)
+    add_executable(test_structured_index_sort test_structured_index_sort.cpp ${structured_index_sort_srcs} ${util_srcs})
+endif ()
+target_link_libraries(test_structured_index_sort ${depend_libs} ${unittest_libs} ${basic_libs})
+install(TARGETS test_structured_index_sort DESTINATION unittest)
 
 #add_subdirectory(faiss_ori)
 #add_subdirectory(faiss_benchmark)

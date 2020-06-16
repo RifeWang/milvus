@@ -37,7 +37,13 @@ class ClientTest {
     InsertHybridEntities(std::string&, int64_t);
 
     void
+    HybridSearchPB(std::string&);
+
+    void
     HybridSearch(std::string&);
+
+    void
+    GetHEntityByID(const std::string&, const std::vector<int64_t>&);
 
  private:
     std::shared_ptr<milvus::Connection> conn_;

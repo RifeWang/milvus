@@ -57,7 +57,7 @@ namespace grpc {
 ::milvus::grpc::ErrorCode
 ErrorMap(ErrorCode code);
 
-static const char* EXTRA_PARAM_KEY = "params";
+extern const char* EXTRA_PARAM_KEY;
 
 class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, public GrpcInterceptorHookHandler {
  public:
@@ -298,6 +298,11 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
                       ::milvus::grpc::Status* response) override;
 
     // *
+    ::grpc::Status
+    ReloadSegments(::grpc::ServerContext* context, const ::milvus::grpc::ReLoadSegmentsParam* request,
+                   ::milvus::grpc::Status* response) override;
+
+    // *
     // @brief This method is used to flush buffer into storage.
     //
     // @param FlushParam, flush parameters
@@ -361,8 +366,16 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
                  ::milvus::grpc::HEntityIDs* response) override;
 
     ::grpc::Status
+    HybridSearchPB(::grpc::ServerContext* context, const ::milvus::grpc::HSearchParamPB* request,
+                   ::milvus::grpc::HQueryResult* response) override;
+
+    ::grpc::Status
     HybridSearch(::grpc::ServerContext* context, const ::milvus::grpc::HSearchParam* request,
-                 ::milvus::grpc::TopKQueryResult* response) override;
+                 ::milvus::grpc::HQueryResult* response) override;
+
+    ::grpc::Status
+    GetEntityByID(::grpc::ServerContext* context, const ::milvus::grpc::VectorsIdentity* request,
+                  ::milvus::grpc::HEntity* response) override;
     //
     //    ::grpc::Status
     //    HybridSearchInSegments(::grpc::ServerContext* context,
@@ -370,10 +383,7 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     //                           grpc::HSearchInSegmentsParam* request,
     //                           ::milvus::grpc::HQueryResult* response) override;
     //
-    //    ::grpc::Status
-    //    GetEntityByID(::grpc::ServerContext* context,
-    //                  const ::milvus::grpc::HEntityIdentity* request,
-    //                  ::milvus::grpc::HEntity* response) override;
+
     //
     //    ::grpc::Status
     //    GetEntityIDs(::grpc::ServerContext* context,
@@ -385,10 +395,21 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     //                       const ::milvus::grpc::HDeleteByIDParam* request,
     //                       ::milvus::grpc::Status* response) override;
 
-    GrpcRequestHandler&
+    void
     RegisterRequestHandler(const RequestHandler& handler) {
         request_handler_ = handler;
     }
+
+    Status
+    DeserializeJsonToBoolQuery(const google::protobuf::RepeatedPtrField<::milvus::grpc::VectorParam>& vector_params,
+                               const std::string& dsl_string, query::BooleanQueryPtr& boolean_query,
+                               std::unordered_map<std::string, query::VectorQueryPtr>& query_ptr);
+
+    Status
+    ProcessBooleanQueryJson(const nlohmann::json& query_json, query::BooleanQueryPtr& boolean_query);
+
+    Status
+    ProcessLeafQueryJson(const nlohmann::json& json, query::BooleanQueryPtr& query);
 
  private:
     RequestHandler request_handler_;
@@ -396,6 +417,7 @@ class GrpcRequestHandler final : public ::milvus::grpc::MilvusService::Service, 
     // std::unordered_map<::grpc::ServerContext*, std::shared_ptr<Context>> context_map_;
     std::unordered_map<std::string, std::shared_ptr<Context>> context_map_;
     std::shared_ptr<opentracing::Tracer> tracer_;
+    std::unordered_map<std::string, engine::meta::hybrid::DataType> field_type_;
     //    std::unordered_map<::grpc::ServerContext*, std::unique_ptr<opentracing::Span>> span_map_;
 
     mutable std::mt19937_64 random_num_generator_;

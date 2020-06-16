@@ -63,14 +63,11 @@ class ClientProxy : public Connection {
     CreateIndex(const IndexParam& index_param) override;
 
     Status
-    Insert(const std::string& collection_name,
-           const std::string& partition_tag,
-           const std::vector<Entity>& entity_array,
-           std::vector<int64_t>& id_array) override;
+    Insert(const std::string& collection_name, const std::string& partition_tag,
+           const std::vector<Entity>& entity_array, std::vector<int64_t>& id_array) override;
 
     Status
-    GetEntityByID(const std::string& collection_name,
-                  const std::vector<int64_t>& id_array,
+    GetEntityByID(const std::string& collection_name, const std::vector<int64_t>& id_array,
                   std::vector<Entity>& entities_data) override;
 
     Status
@@ -79,8 +76,8 @@ class ClientProxy : public Connection {
 
     Status
     Search(const std::string& collection_name, const std::vector<std::string>& partition_tag_array,
-           const std::vector<Entity>& entity_array, int64_t topk,
-           const std::string& extra_params, TopKQueryResult& topk_query_result) override;
+           const std::vector<Entity>& entity_array, int64_t topk, const std::string& extra_params,
+           TopKQueryResult& topk_query_result) override;
 
     Status
     GetCollectionInfo(const std::string& collection_name, CollectionParam& collection_param) override;
@@ -130,17 +127,22 @@ class ClientProxy : public Connection {
     CreateHybridCollection(const HMapping& mapping) override;
 
     Status
-    InsertEntity(const std::string& collection_name,
-                 const std::string& partition_tag,
-                 HEntity& entities,
+    InsertEntity(const std::string& collection_name, const std::string& partition_tag, HEntity& entities,
                  std::vector<uint64_t>& id_array) override;
 
     Status
-    HybridSearch(const std::string& collection_name,
-                 const std::vector<std::string>& partition_list,
-                 BooleanQueryPtr& boolean_query,
-                 const std::string& extra_params,
-                 TopKQueryResult& topk_query_result) override;
+    HybridSearchPB(const std::string& collection_name, const std::vector<std::string>& partition_list,
+                   BooleanQueryPtr& boolean_query, const std::string& extra_params,
+                   TopKHybridQueryResult& topk_query_result) override;
+
+    Status
+    HybridSearch(const std::string& collection_name, const std::vector<std::string>& partition_list,
+                 const std::string& dsl, const std::string& vector_param, const std::vector<Entity>& entity_array,
+                 TopKHybridQueryResult& query_result) override;
+
+    Status
+    GetHEntityByID(const std::string& collection_name, const std::vector<int64_t>& id_array,
+                   HybridQueryResult& result) override;
 
  private:
     std::shared_ptr<::grpc::Channel> channel_;

@@ -23,8 +23,9 @@ namespace engine {
 
 class Env;
 
-static const char* ARCHIVE_CONF_DISK = "disk";
-static const char* ARCHIVE_CONF_DAYS = "days";
+extern const char* ARCHIVE_CONF_DISK;
+extern const char* ARCHIVE_CONF_DAYS;
+extern const char* DEFAULT_PARTITON_TAG;
 
 struct ArchiveConf {
     using CriteriaT = std::map<std::string, int64_t>;
@@ -56,7 +57,6 @@ struct ArchiveConf {
 
 struct DBMetaOptions {
     std::string path_;
-    std::vector<std::string> slave_paths_;
     std::string backend_uri_;
     ArchiveConf archive_conf_ = ArchiveConf("delete");
 };  // DBMetaOptions
@@ -73,6 +73,8 @@ struct DBOptions {
 
     int64_t auto_flush_interval_ = 1;
     int64_t file_cleanup_timeout_ = 10;
+
+    bool metric_enable_ = false;
 
     // wal relative configurations
     bool wal_enable_ = true;

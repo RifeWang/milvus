@@ -25,6 +25,9 @@
 #include "cache/GpuCacheMgr.h"
 #include "db/DBFactory.h"
 #include "db/Options.h"
+#include "db/snapshot/OperationExecutor.h"
+#include "db/snapshot/Snapshots.h"
+#include "db/snapshot/ResourceHolders.h"
 
 
 #ifdef MILVUS_GPU_VERSION
@@ -39,6 +42,60 @@ INITIALIZE_EASYLOGGINGPP
 namespace {
 
 static const char* CONFIG_STR =
+    "version: 0.5\n"
+    "\n"
+    "cluster:\n"
+    "  enable: false\n"
+    "  role: rw\n"
+    "\n"
+    "general:\n"
+    "  timezone: UTC+8\n"
+    "  meta_uri: sqlite://:@:/\n"
+    "\n"
+    "network:\n"
+    "  bind.address: 0.0.0.0\n"
+    "  bind.port: 19530\n"
+    "  http.enable: true\n"
+    "  http.port: 19121\n"
+    "\n"
+    "storage:\n"
+    "  path: /tmp/milvus\n"
+    "  auto_flush_interval: 1\n"
+    "\n"
+    "wal:\n"
+    "  enable: true\n"
+    "  recovery_error_ignore: false\n"
+    "  buffer_size: 256MB\n"
+    "  path: /tmp/milvus/wal\n"
+    "\n"
+    "cache:\n"
+    "  cache_size: 4GB\n"
+    "  insert_buffer_size: 1GB\n"
+    "  preload_collection:\n"
+    "\n"
+    "gpu:\n"
+    "  enable: true\n"
+    "  cache_size: 1GB\n"
+    "  gpu_search_threshold: 1000\n"
+    "  search_devices:\n"
+    "    - gpu0\n"
+    "  build_index_devices:\n"
+    "    - gpu0\n"
+    "\n"
+    "logs:\n"
+    "  level: debug\n"
+    "  trace.enable: true\n"
+    "  path: /tmp/milvus/logs\n"
+    "  max_log_file_size: 1024MB\n"
+    "  log_rotate_num: 0\n"
+    "\n"
+    "metric:\n"
+    "  enable: false\n"
+    "  address: 127.0.0.1\n"
+    "  port: 9091\n"
+    "\n";
+
+/*static const char* CONFIG_STR =
     "version: 0.4\n"
     "server_config:\n"
     "  address: 0.0.0.0\n"
@@ -100,6 +157,7 @@ static const char* CONFIG_STR =
     "  max_log_file_size: 256\n"
     "  delete_exceeds: 10\n"
     "";
+*/
 
 void
 WriteToFile(const std::string &file_path, const char *content) {
@@ -349,6 +407,36 @@ MySqlMetaTest::GetOptions() {
     options.meta_.backend_uri_ = test_env->getURI();
 
     return options;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void
+SnapshotTest::SetUp() {
+    BaseTest::SetUp();
+    milvus::engine::snapshot::OperationExecutor::GetInstance().Start();
+    milvus::engine::snapshot::CollectionCommitsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::CollectionsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::SchemaCommitsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::FieldCommitsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::FieldsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::FieldElementsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::PartitionsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::PartitionCommitsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::SegmentsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::SegmentCommitsHolder::GetInstance().Reset();
+    milvus::engine::snapshot::SegmentFilesHolder::GetInstance().Reset();
+
+    milvus::engine::snapshot::Snapshots::GetInstance().Reset();
+    milvus::engine::snapshot::Store::GetInstance().Mock();
+    milvus::engine::snapshot::Snapshots::GetInstance().Init();
+}
+
+void
+SnapshotTest::TearDown() {
+    // TODO: Temp to delay some time. OperationExecutor should wait all resources be destructed before stop
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    milvus::engine::snapshot::OperationExecutor::GetInstance().Stop();
+    BaseTest::TearDown();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////

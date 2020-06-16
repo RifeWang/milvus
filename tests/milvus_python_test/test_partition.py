@@ -12,9 +12,9 @@ from utils import *
 dim = 128
 index_file_size = 10
 collection_id = "test_partition"
-ADD_TIMEOUT = 60
 nprobe = 1
 tag = "1970-01-01"
+TIMEOUT = 120
 
 
 class TestCreateBase:
@@ -33,12 +33,16 @@ class TestCreateBase:
         status = connect.create_partition(collection, tag)
         assert status.OK()
 
-    def _test_create_partition_limit(self, connect, collection):
+    @pytest.mark.level(3)
+    def test_create_partition_limit(self, connect, collection, args):
         '''
         target: test create partitions, check status returned
         method: call function: create_partition for 4097 times
         expected: status not ok
         '''
+        if args["handler"] == "HTTP":
+            pytest.skip("skip in http mode")
+
         for i in range(4096):
             tag_tmp = gen_unique_str()
             status = connect.create_partition(collection, tag_tmp)

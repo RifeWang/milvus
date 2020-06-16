@@ -31,7 +31,7 @@ const size_t WEEK = 7 * DAY;
 // 1. The performance of brute-search for small raw files could be better than small index file.
 // 2. And small raw files can be merged to larger files, thus reduce fragmented files count.
 // We decide the value based on a testing for small size raw/index files.
-const size_t BUILD_INDEX_THRESHOLD = 5000;
+const size_t BUILD_INDEX_THRESHOLD = 4096;
 
 }  // namespace meta
 }  // namespace engine

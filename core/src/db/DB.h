@@ -71,7 +71,11 @@ class DB {
     GetCollectionRowCount(const std::string& collection_id, uint64_t& row_count) = 0;
 
     virtual Status
-    PreloadCollection(const std::string& collection_id) = 0;
+    PreloadCollection(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+                      bool force = false) = 0;
+
+    virtual Status
+    ReLoadSegmentsDeletedDocs(const std::string& collection_id, const std::vector<int64_t>& segment_ids) = 0;
 
     virtual Status
     UpdateCollectionFlag(const std::string& collection_id, int64_t flag) = 0;
@@ -108,11 +112,16 @@ class DB {
     Flush() = 0;
 
     virtual Status
-    Compact(const std::string& collection_id, double threshold = 0.0) = 0;
+    Compact(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
+            double threshold = 0.0) = 0;
 
     virtual Status
-    GetVectorsByID(const std::string& collection_id, const IDNumbers& id_array,
+    GetVectorsByID(const engine::meta::CollectionSchema& collection, const IDNumbers& id_array,
                    std::vector<engine::VectorsData>& vectors) = 0;
+
+    virtual Status
+    GetEntitiesByID(const std::string& collection_id, const IDNumbers& id_array,
+                    std::vector<engine::VectorsData>& vectors, std::vector<engine::AttrsData>& attrs) = 0;
 
     virtual Status
     GetVectorIDs(const std::string& collection_id, const std::string& segment_id, IDNumbers& vector_ids) = 0;
@@ -164,10 +173,10 @@ class DB {
 
     virtual Status
     HybridQuery(const std::shared_ptr<server::Context>& context, const std::string& collection_id,
-                const std::vector<std::string>& partition_tags, context::HybridSearchContextPtr hybrid_search_context,
-                query::GeneralQueryPtr general_query,
-                std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type, uint64_t& nq,
-                engine::ResultIds& result_ids, engine::ResultDistances& result_distances) = 0;
+                const std::vector<std::string>& partition_tags, query::GeneralQueryPtr general_query,
+                query::QueryPtr query_ptr, std::vector<std::string>& field_name,
+                std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
+                engine::QueryResult& result) = 0;
 };  // DB
 
 using DBPtr = std::shared_ptr<DB>;

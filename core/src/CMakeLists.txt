@@ -18,6 +18,7 @@ include_directories(${MILVUS_THIRDPARTY_SRC})
 include_directories(${MILVUS_ENGINE_SRC}/grpc/gen-status)
 include_directories(${MILVUS_ENGINE_SRC}/grpc/gen-milvus)
 
+set(FOUND_OPENBLAS "unknown")
 add_subdirectory(index)
 if (FAISS_WITH_MKL)
     add_compile_definitions("WITH_MKL")
@@ -39,6 +40,7 @@ aux_source_directory(${MILVUS_ENGINE_SRC}/db/insert db_insert_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/meta db_meta_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/merge db_merge_files)
 aux_source_directory(${MILVUS_ENGINE_SRC}/db/wal db_wal_files)
+aux_source_directory(${MILVUS_ENGINE_SRC}/db/snapshot db_snapshot_files)
 
 set(grpc_service_files
         ${MILVUS_ENGINE_SRC}/grpc/gen-milvus/milvus.grpc.pb.cc
@@ -146,6 +148,7 @@ set(engine_files
         ${db_meta_files}
         ${db_merge_files}
         ${db_wal_files}
+        ${db_snapshot_files}
         ${metrics_files}
         ${storage_files}
         ${thirdparty_files}
@@ -333,10 +336,10 @@ install(FILES
         ${CMAKE_BINARY_DIR}/fiu_ep-prefix/src/fiu_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}fiu${CMAKE_SHARED_LIBRARY_SUFFIX}.1.00
         DESTINATION lib)
 
-if(EXISTS ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/)
+if (FOUND_OPENBLAS STREQUAL "false")
     install(FILES
-            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}
-            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0
-            ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0.3
-            DESTINATION lib)
+        ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}
+        ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0
+        ${CMAKE_BINARY_DIR}/src/index/openblas_ep-prefix/src/openblas_ep/lib/${CMAKE_SHARED_LIBRARY_PREFIX}openblas${CMAKE_SHARED_LIBRARY_SUFFIX}.0.3
+        DESTINATION lib)
 endif()

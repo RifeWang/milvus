@@ -22,9 +22,15 @@ SearchJob::SearchJob(const std::shared_ptr<server::Context>& context, uint64_t t
 }
 
 SearchJob::SearchJob(const std::shared_ptr<server::Context>& context, milvus::query::GeneralQueryPtr general_query,
+                     query::QueryPtr query_ptr,
                      std::unordered_map<std::string, engine::meta::hybrid::DataType>& attr_type,
                      const engine::VectorsData& vectors)
-    : Job(JobType::SEARCH), context_(context), general_query_(general_query), attr_type_(attr_type), vectors_(vectors) {
+    : Job(JobType::SEARCH),
+      context_(context),
+      general_query_(general_query),
+      query_ptr_(query_ptr),
+      attr_type_(attr_type),
+      vectors_(vectors) {
 }
 
 bool
@@ -44,6 +50,9 @@ void
 SearchJob::WaitResult() {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait(lock, [this] { return index_files_.empty(); });
+    LOG_SERVER_DEBUG_ << LogOut("[%s][%ld] SearchJob %ld: query_time %f, map_uids_time %f, reduce_time %f", "search", 0,
+                                id(), this->time_stat().query_time, this->time_stat().map_uids_time,
+                                this->time_stat().reduce_time);
     LOG_SERVER_DEBUG_ << LogOut("[%s][%ld] SearchJob %ld all done", "search", 0, id());
 }
 

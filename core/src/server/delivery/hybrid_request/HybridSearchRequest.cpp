@@ -31,30 +31,32 @@ namespace milvus {
 namespace server {
 
 HybridSearchRequest::HybridSearchRequest(const std::shared_ptr<milvus::server::Context>& context,
-                                         context::HybridSearchContextPtr& hybrid_search_context,
                                          const std::string& collection_name, std::vector<std::string>& partition_list,
-                                         milvus::query::GeneralQueryPtr& general_query, TopKQueryResult& result)
+                                         query::GeneralQueryPtr& general_query, query::QueryPtr& query_ptr,
+                                         milvus::json& json_params, std::vector<std::string>& field_names,
+                                         engine::QueryResult& result)
     : BaseRequest(context, BaseRequest::kHybridSearch),
-      hybrid_search_contxt_(hybrid_search_context),
       collection_name_(collection_name),
       partition_list_(partition_list),
       general_query_(general_query),
+      query_ptr_(query_ptr),
+      field_names_(field_names),
       result_(result) {
 }
 
 BaseRequestPtr
-HybridSearchRequest::Create(const std::shared_ptr<milvus::server::Context>& context,
-                            context::HybridSearchContextPtr& hybrid_search_context, const std::string& collection_name,
-                            std::vector<std::string>& partition_list, milvus::query::GeneralQueryPtr& general_query,
-                            TopKQueryResult& result) {
-    return std::shared_ptr<BaseRequest>(new HybridSearchRequest(context, hybrid_search_context, collection_name,
-                                                                partition_list, general_query, result));
+HybridSearchRequest::Create(const std::shared_ptr<milvus::server::Context>& context, const std::string& collection_name,
+                            std::vector<std::string>& partition_list, query::GeneralQueryPtr& general_query,
+                            query::QueryPtr& query_ptr, milvus::json& json_params,
+                            std::vector<std::string>& field_names, engine::QueryResult& result) {
+    return std::shared_ptr<BaseRequest>(new HybridSearchRequest(context, collection_name, partition_list, general_query,
+                                                                query_ptr, json_params, field_names, result));
 }
 
 Status
 HybridSearchRequest::OnExecute() {
     try {
-        fiu_do_on("SearchRequest.OnExecute.throw_std_exception", throw std::exception());
+        fiu_do_on("HybridSearchRequest.OnExecute.throw_std_exception", throw std::exception());
         std::string hdr = "SearchRequest(table=" + collection_name_;
 
         TimeRecorder rc(hdr);
@@ -71,7 +73,8 @@ HybridSearchRequest::OnExecute() {
         engine::meta::hybrid::FieldsSchema fields_schema;
         collection_schema.collection_id_ = collection_name_;
         status = DBWrapper::DB()->DescribeHybridCollection(collection_schema, fields_schema);
-        fiu_do_on("SearchRequest.OnExecute.describe_table_fail", status = Status(milvus::SERVER_UNEXPECTED_ERROR, ""));
+        fiu_do_on("HybridSearchRequest.OnExecute.describe_table_fail",
+                  status = Status(milvus::SERVER_UNEXPECTED_ERROR, ""));
         if (!status.ok()) {
             if (status.code() == DB_NOT_FOUND) {
                 return Status(SERVER_COLLECTION_NOT_EXIST, CollectionNotExistMsg(collection_name_));
@@ -85,39 +88,42 @@ HybridSearchRequest::OnExecute() {
         }
 
         std::unordered_map<std::string, engine::meta::hybrid::DataType> attr_type;
-        for (uint64_t i = 0; i < fields_schema.fields_schema_.size(); ++i) {
+        for (auto& field_schema : fields_schema.fields_schema_) {
             attr_type.insert(
-                std::make_pair(fields_schema.fields_schema_[i].field_name_,
-                               (engine::meta::hybrid::DataType)fields_schema.fields_schema_[i].field_type_));
+                std::make_pair(field_schema.field_name_, (engine::meta::hybrid::DataType)field_schema.field_type_));
         }
 
-        engine::ResultIds result_ids;
-        engine::ResultDistances result_distances;
-        uint64_t nq;
+        if (json_params.contains("field_names")) {
+            if (json_params["field_names"].is_array()) {
+                for (auto& name : json_params["field_names"]) {
+                    field_names_.emplace_back(name.get<std::string>());
+                }
+            }
+        } else {
+            for (auto& field_schema : fields_schema.fields_schema_) {
+                field_names_.emplace_back(field_schema.field_name_);
+            }
+        }
 
-        status = DBWrapper::DB()->HybridQuery(context_, collection_name_, partition_list_, hybrid_search_contxt_,
-                                              general_query_, attr_type, nq, result_ids, result_distances);
+        status = DBWrapper::DB()->HybridQuery(context_, collection_name_, partition_list_, general_query_, query_ptr_,
+                                              field_names_, attr_type, result_);
 
 #ifdef ENABLE_CPU_PROFILING
         ProfilerStop();
 #endif
 
-        fiu_do_on("SearchRequest.OnExecute.query_fail", status = Status(milvus::SERVER_UNEXPECTED_ERROR, ""));
+        fiu_do_on("HybridSearchRequest.OnExecute.query_fail", status = Status(milvus::SERVER_UNEXPECTED_ERROR, ""));
         if (!status.ok()) {
             return status;
         }
-        fiu_do_on("SearchRequest.OnExecute.empty_result_ids", result_ids.clear());
-        if (result_ids.empty()) {
+        fiu_do_on("HybridSearchRequest.OnExecute.empty_result_ids", result_.result_ids_.clear());
+        if (result_.result_ids_.empty()) {
             return Status::OK();  // empty table
         }
 
         auto post_query_ctx = context_->Child("Constructing result");
 
         // step 7: construct result array
-        result_.row_num_ = nq;
-        result_.distance_list_ = result_distances;
-        result_.id_list_ = result_ids;
-
         post_query_ctx->GetTraceContext()->GetSpan()->Finish();
 
         // step 8: print time cost percent

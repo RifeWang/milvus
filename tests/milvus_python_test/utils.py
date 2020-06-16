@@ -1,8 +1,8 @@
-# STL imports
+import os
+import sys
 import random
 import string
 import struct
-import sys
 import logging
 import time, datetime
 import copy
@@ -11,6 +11,8 @@ from milvus import Milvus, IndexType, MetricType
 
 port = 19530
 epsilon = 0.000001
+default_flush_interval = 1
+big_flush_interval = 1000
 
 all_index_types = [
     IndexType.FLAT,
@@ -24,14 +26,29 @@ all_index_types = [
 ]
 
 
-def get_milvus(host, port, uri=None, handler=None):
+def get_milvus(host, port, uri=None, handler=None, **kwargs):
     if handler is None:
         handler = "GRPC"
+    try_connect = kwargs.get("try_connect", True)
     if uri is not None:
-        milvus = Milvus(uri=uri, handler=handler)
+        milvus = Milvus(uri=uri, handler=handler, try_connect=try_connect)
     else:
-        milvus = Milvus(host=host, port=port, handler=handler)
+        milvus = Milvus(host=host, port=port, handler=handler, try_connect=try_connect)
     return milvus
+
+
+def disable_flush(connect):
+    status, reply = connect.set_config("storage", "auto_flush_interval", big_flush_interval)
+    assert status.OK()
+
+
+def enable_flush(connect):
+    # reset auto_flush_interval=1
+    status, reply = connect.set_config("storage", "auto_flush_interval", default_flush_interval)
+    assert status.OK()
+    status, config_value = connect.get_config("storage", "auto_flush_interval")
+    assert status.OK()
+    assert config_value == str(default_flush_interval)
 
 
 def gen_inaccuracy(num):
@@ -453,7 +470,7 @@ def gen_invalid_cache_config():
     return invalid_configs
 
 
-def gen_invalid_engine_config():
+def gen_invalid_gpu_config():
     invalid_configs = [
             -1,
             [1,2,3],
@@ -625,3 +642,55 @@ def assert_equal_vector(v1, v2):
         assert False
     for i in range(len(v1)):
         assert abs(v1[i] - v2[i]) < epsilon
+
+
+def restart_server(helm_release_name):
+    res = True
+    timeout = 120
+    from kubernetes import client, config
+    client.rest.logger.setLevel(logging.WARNING)
+
+    namespace = "milvus"
+    # service_name = "%s.%s.svc.cluster.local" % (helm_release_name, namespace)
+    config.load_kube_config()
+    v1 = client.CoreV1Api()
+    pod_name = None
+    # config_map_names = v1.list_namespaced_config_map(namespace, pretty='true')
+    # body = {"replicas": 0}
+    pods = v1.list_namespaced_pod(namespace)
+    for i in pods.items:
+        if i.metadata.name.find(helm_release_name) != -1 and i.metadata.name.find("mysql") == -1:
+            pod_name = i.metadata.name
+            break
+            # v1.patch_namespaced_config_map(config_map_name, namespace, body, pretty='true')
+    # status_res = v1.read_namespaced_service_status(helm_release_name, namespace, pretty='true')
+    # print(status_res)
+    if pod_name is not None:
+        try:
+            v1.delete_namespaced_pod(pod_name, namespace)
+        except Exception as e:
+            logging.error(str(e))
+            logging.error("Exception when calling CoreV1Api->delete_namespaced_pod")
+            res = False
+            return res
+        time.sleep(5)
+        # check if restart successfully
+        pods = v1.list_namespaced_pod(namespace)
+        for i in pods.items:
+            pod_name_tmp = i.metadata.name
+            if pod_name_tmp.find(helm_release_name) != -1:
+                logging.debug(pod_name_tmp)
+                start_time = time.time()
+                while time.time() - start_time > timeout:
+                    status_res = v1.read_namespaced_pod_status(pod_name_tmp, namespace, pretty='true')
+                    if status_res.status.phase == "Running":
+                        break
+                    time.sleep(1)
+                if time.time() - start_time > timeout:
+                    logging.error("Restart pod: %s timeout" % pod_name_tmp)
+                    res = False
+                    return res
+    else:
+        logging.error("Pod: %s not found" % helm_release_name)
+        res = False
+    return res

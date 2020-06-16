@@ -34,37 +34,34 @@ DBWrapper::StartService() {
 
     // db config
     engine::DBOptions opt;
-    s = config.GetDBConfigBackendUrl(opt.meta_.backend_uri_);
-    if (!s.ok()) {
-        std::cerr << s.ToString() << std::endl;
-        return s;
-    }
-
-    s = config.GetDBConfigAutoFlushInterval(opt.auto_flush_interval_);
+    s = config.GetGeneralConfigMetaURI(opt.meta_.backend_uri_);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
     }
 
     std::string path;
-    s = config.GetStorageConfigPrimaryPath(path);
+    s = config.GetStorageConfigPath(path);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
     }
-
     opt.meta_.path_ = path + "/db";
 
-    std::string db_slave_path;
-    s = config.GetStorageConfigSecondaryPath(db_slave_path);
+    s = config.GetStorageConfigAutoFlushInterval(opt.auto_flush_interval_);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
     }
 
-    StringHelpFunctions::SplitStringByDelimeter(db_slave_path, ";", opt.meta_.slave_paths_);
-
     s = config.GetStorageConfigFileCleanupTimeup(opt.file_cleanup_timeout_);
+    if (!s.ok()) {
+        std::cerr << s.ToString() << std::endl;
+        return s;
+    }
+
+    // metric config
+    s = config.GetMetricConfigEnableMonitor(opt.metric_enable_);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
@@ -83,24 +80,20 @@ DBWrapper::StartService() {
         std::cerr << s.ToString() << std::endl;
         return s;
     }
-    opt.insert_buffer_size_ = insert_buffer_size * engine::GB;
+    opt.insert_buffer_size_ = insert_buffer_size;
 
-    std::string mode;
-    s = config.GetServerConfigDeployMode(mode);
-    if (!s.ok()) {
-        std::cerr << s.ToString() << std::endl;
-        return s;
-    }
-
-    if (mode == "single") {
+    bool cluster_enable = false;
+    std::string cluster_role;
+    STATUS_CHECK(config.GetClusterConfigEnable(cluster_enable));
+    STATUS_CHECK(config.GetClusterConfigRole(cluster_role));
+    if (not cluster_enable) {
         opt.mode_ = engine::DBOptions::MODE::SINGLE;
-    } else if (mode == "cluster_readonly") {
+    } else if (cluster_role == "ro") {
         opt.mode_ = engine::DBOptions::MODE::CLUSTER_READONLY;
-    } else if (mode == "cluster_writable") {
+    } else if (cluster_role == "rw") {
         opt.mode_ = engine::DBOptions::MODE::CLUSTER_WRITABLE;
     } else {
-        std::cerr << "Error: server_config.deploy_mode in server_config.yaml is not one of "
-                  << "single, cluster_readonly, and cluster_writable." << std::endl;
+        std::cerr << "Error: cluster.role is not one of rw and ro." << std::endl;
         kill(0, SIGUSR1);
     }
 
@@ -120,12 +113,15 @@ DBWrapper::StartService() {
             kill(0, SIGUSR1);
         }
 
-        s = config.GetWalConfigBufferSize(opt.buffer_size_);
+        int64_t wal_buffer_size = 0;
+        s = config.GetWalConfigBufferSize(wal_buffer_size);
         if (!s.ok()) {
             std::cerr << "ERROR! Failed to get buffer_size configuration." << std::endl;
             std::cerr << s.ToString() << std::endl;
             kill(0, SIGUSR1);
         }
+        wal_buffer_size /= (1024 * 1024);
+        opt.buffer_size_ = wal_buffer_size;
 
         s = config.GetWalConfigWalPath(opt.mxlog_path_);
         if (!s.ok()) {
@@ -196,16 +192,6 @@ DBWrapper::StartService() {
         kill(0, SIGUSR1);
     }
 
-    for (auto& path : opt.meta_.slave_paths_) {
-        s = CommonUtil::CreateDirectory(path);
-        if (!s.ok()) {
-            std::cerr << "Error: Failed to create database secondary path: " << path
-                      << ". Possible reason: db_config.secondary_path is wrong in server_config.yaml or not available."
-                      << std::endl;
-            kill(0, SIGUSR1);
-        }
-    }
-
     // create db instance
     try {
         db_ = engine::DBFactory::Build(opt);
@@ -220,7 +206,7 @@ DBWrapper::StartService() {
 
     // preload collection
     std::string preload_collections;
-    s = config.GetDBConfigPreloadCollection(preload_collections);
+    s = config.GetCacheConfigPreloadCollection(preload_collections);
     if (!s.ok()) {
         std::cerr << s.ToString() << std::endl;
         return s;
@@ -255,7 +241,7 @@ DBWrapper::PreloadCollections(const std::string& preload_collections) {
         db_->AllCollections(table_schema_array);
 
         for (auto& schema : table_schema_array) {
-            auto status = db_->PreloadCollection(schema.collection_id_);
+            auto status = db_->PreloadCollection(nullptr, schema.collection_id_);
             if (!status.ok()) {
                 return status;
             }
@@ -264,7 +250,7 @@ DBWrapper::PreloadCollections(const std::string& preload_collections) {
         std::vector<std::string> collection_names;
         StringHelpFunctions::SplitStringByDelimeter(preload_collections, ",", collection_names);
         for (auto& name : collection_names) {
-            auto status = db_->PreloadCollection(name);
+            auto status = db_->PreloadCollection(nullptr, name);
             if (!status.ok()) {
                 return status;
             }

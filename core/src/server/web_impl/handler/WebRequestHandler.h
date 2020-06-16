@@ -141,6 +141,9 @@ class WebRequestHandler {
     Status
     GetVectorsByIDs(const std::string& collection_name, const std::vector<int64_t>& ids, nlohmann::json& json_out);
 
+    Status
+    GetEntityByIDs(const std::string& collection_name, const std::vector<int64_t>& ids, nlohmann::json& json_out);
+
  public:
     WebRequestHandler() {
         context_ptr_ = GenContextPtr("Web Handler");
@@ -220,6 +223,9 @@ class WebRequestHandler {
     InsertEntity(const OString& collection_name, const OString& body, VectorIdsDto::ObjectWrapper& ids_dto);
 
     StatusDto::ObjectWrapper
+    GetEntity(const OString& collection_name, const OQueryParams& query_params, OString& response);
+
+    StatusDto::ObjectWrapper
     GetVector(const OString& collection_name, const OQueryParams& query_params, OString& response);
 
     StatusDto::ObjectWrapper
@@ -244,6 +250,7 @@ class WebRequestHandler {
  private:
     std::shared_ptr<Context> context_ptr_;
     RequestHandler request_handler_;
+    query::QueryPtr query_ptr_;
     std::unordered_map<std::string, engine::meta::hybrid::DataType> field_type_;
 };
 
