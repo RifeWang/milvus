@@ -19,8 +19,9 @@ namespace knowhere {
 
 ConfAdapterPtr
 AdapterMgr::GetAdapter(const IndexType type) {
-    if (!init_)
+    if (!init_) {
         RegisterAdapter();
+    }
 
     try {
         return collection_.at(type)();
@@ -49,6 +50,11 @@ AdapterMgr::RegisterAdapter() {
 #endif
     REGISTER_CONF_ADAPTER(HNSWConfAdapter, IndexEnum::INDEX_HNSW, hnsw_adapter);
     REGISTER_CONF_ADAPTER(ANNOYConfAdapter, IndexEnum::INDEX_ANNOY, annoy_adapter);
+    REGISTER_CONF_ADAPTER(RHNSWFlatConfAdapter, IndexEnum::INDEX_RHNSWFlat, rhnswflat_adapter);
+    REGISTER_CONF_ADAPTER(RHNSWPQConfAdapter, IndexEnum::INDEX_RHNSWPQ, rhnswpq_adapter);
+    REGISTER_CONF_ADAPTER(RHNSWSQConfAdapter, IndexEnum::INDEX_RHNSWSQ, rhnswsq_adapter);
+    REGISTER_CONF_ADAPTER(NGTPANNGConfAdapter, IndexEnum::INDEX_NGTPANNG, ngtpanng_adapter);
+    REGISTER_CONF_ADAPTER(NGTONNGConfAdapter, IndexEnum::INDEX_NGTONNG, ngtonng_adapter);
 }
 
 }  // namespace knowhere

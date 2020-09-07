@@ -783,7 +783,7 @@ struct Euclidean : Minkowski {
   }
   template<typename T>
   static inline T normalized_distance(T distance) {
-    return sqrt(std::max(distance, T(0)));
+    return distance;
   }
   template<typename S, typename T>
   static inline void init_node(Node<S, T>* n, int f) {
@@ -838,9 +838,9 @@ class AnnoyIndexInterface {
   virtual bool load_index(void* index_data, const int64_t& index_size, char** error = nullptr) = 0;
   virtual T get_distance(S i, S j) const = 0;
   virtual void get_nns_by_item(S item, size_t n, int64_t search_k, vector<S>* result, vector<T>* distances,
-                               faiss::ConcurrentBitsetPtr& bitset = nullptr) const = 0;
+                               const faiss::ConcurrentBitsetPtr& bitset = nullptr) const = 0;
   virtual void get_nns_by_vector(const T* w, size_t n, int64_t search_k, vector<S>* result, vector<T>* distances,
-                               faiss::ConcurrentBitsetPtr& bitset = nullptr) const = 0;
+                               const faiss::ConcurrentBitsetPtr& bitset = nullptr) const = 0;
   virtual S get_n_items() const = 0;
   virtual S get_dim() const = 0;
   virtual S get_n_trees() const = 0;
@@ -850,6 +850,7 @@ class AnnoyIndexInterface {
   virtual void get_item(S item, T* v) const = 0;
   virtual void set_seed(int q) = 0;
   virtual bool on_disk_build(const char* filename, char** error=nullptr) = 0;
+  virtual int64_t cal_size() = 0;
 };
 
 template<typename S, typename T, typename Distance, typename Random>
@@ -1176,14 +1177,14 @@ public:
   }
 
   void get_nns_by_item(S item, size_t n, int64_t search_k, vector<S>* result, vector<T>* distances,
-                       faiss::ConcurrentBitsetPtr& bitset) const {
+                       const faiss::ConcurrentBitsetPtr& bitset) const {
     // TODO: handle OOB
     const Node* m = _get(item);
     _get_all_nns(m->v, n, search_k, result, distances, bitset);
   }
 
   void get_nns_by_vector(const T* w, size_t n, int64_t search_k, vector<S>* result, vector<T>* distances,
-                         faiss::ConcurrentBitsetPtr& bitset) const {
+                         const faiss::ConcurrentBitsetPtr& bitset) const {
     _get_all_nns(w, n, search_k, result, distances, bitset);
   }
 
@@ -1333,7 +1334,7 @@ protected:
   }
 
   void _get_all_nns(const T* v, size_t n, int64_t search_k, vector<S>* result, vector<T>* distances,
-                    faiss::ConcurrentBitsetPtr& bitset) const {
+                    const faiss::ConcurrentBitsetPtr& bitset) const {
     Node* v_node = (Node *)alloca(_s);
     D::template zero_value<Node>(v_node);
     memcpy(v_node->v, v, sizeof(T) * _f);
@@ -1396,6 +1397,14 @@ protected:
       result->push_back(nns_dist[i].second);
     }
   }
+
+  int64_t cal_size() {
+     int64_t ret = 0;
+     ret += sizeof(*this);
+     ret += _roots.size() * sizeof(S);
+     ret += std::max(_n_nodes, _nodes_size) * _s;
+     return ret;
+   }
 };
 
 #endif

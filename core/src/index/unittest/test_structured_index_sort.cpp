@@ -11,7 +11,9 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <chrono>
 #include <iostream>
+#include <random>
 #include <sstream>
 
 #include "knowhere/index/structured_index/StructuredIndexSort.h"
@@ -25,6 +27,27 @@ gen_rand_data(int range, int n, int*& p) {
     int* q = p;
     for (auto i = 0; i < n; ++i) {
         *q++ = (int)random() % range;
+    }
+}
+
+void
+gen_rand_int64_data(int64_t range, int64_t n, int64_t*& p) {
+    srand((int64_t)time(nullptr));
+    p = (int64_t*)malloc(n * sizeof(int64_t));
+    int64_t* q = p;
+    for (auto i = 0; i < n; ++i) {
+        *q++ = (int64_t)random() % range;
+    }
+}
+
+void
+gen_rand_double_data(double range, int64_t n, double*& p) {
+    std::uniform_real_distribution<double> unif(0, range);
+    std::default_random_engine re;
+    p = (double*)malloc(n * sizeof(double));
+    double* q = p;
+    for (auto i = 0; i < n; ++i) {
+        *q++ = unif(re);
     }
 }
 
@@ -93,7 +116,7 @@ TEST(STRUCTUREDINDEXSORT_TEST, test_in) {
     gen_rand_data(range, n, p);
     milvus::knowhere::StructuredIndexSort<int> structuredIndexSort((size_t)n, p);  // Build default
 
-    size_t test_times = 10;
+    int test_times = 10;
     std::vector<int> test_vals, test_off;
     test_vals.reserve(test_times);
     test_off.reserve(test_times);
@@ -118,25 +141,25 @@ TEST(STRUCTUREDINDEXSORT_TEST, test_not_in) {
     gen_rand_data(range, n, p);
     milvus::knowhere::StructuredIndexSort<int> structuredIndexSort((size_t)n, p);  // Build default
 
-    size_t test_times = 10;
+    int test_times = 10;
     std::vector<int> test_vals, test_off;
     test_vals.reserve(test_times);
     test_off.reserve(test_times);
-    //    std::cout << "STRUCTUREDINDEXSORT_TEST test_notin" << std::endl;
+    // std::cout << "STRUCTUREDINDEXSORT_TEST test_notin" << std::endl;
     for (auto i = 0; i < test_times; ++i) {
         auto off = random() % n;
         test_vals.emplace_back(*(p + off));
         test_off.emplace_back(off);
-        //        std::cout << off << " ";
+        // std::cout << off << " ";
     }
-    //    std::cout << std::endl;
+    // std::cout << std::endl;
     auto res = structuredIndexSort.NotIn(test_times, test_vals.data());
-    //    std::cout << "assert values: " << std::endl;
+    // std::cout << "assert values: " << std::endl;
     for (auto i = 0; i < test_times; ++i) {
-        //        std::cout << test_off[i] << " ";
+        // std::cout << test_off[i] << " ";
         ASSERT_EQ(false, res->test(test_off[i]));
     }
-    //    std::cout << std::endl;
+    // std::cout << std::endl;
 
     free(p);
 }

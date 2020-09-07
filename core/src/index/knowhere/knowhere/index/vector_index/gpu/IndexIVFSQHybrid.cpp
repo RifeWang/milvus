@@ -10,10 +10,11 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
+#include <faiss/IndexSQHybrid.h>
 #include <faiss/gpu/GpuCloner.h>
 #include <faiss/gpu/GpuIndexIVF.h>
 #include <faiss/index_factory.h>
-#include <fiu-local.h>
+#include <fiu/fiu-local.h>
 #include <string>
 #include <utility>
 
@@ -30,7 +31,7 @@ namespace knowhere {
 
 void
 IVFSQHybrid::Train(const DatasetPtr& dataset_ptr, const Config& config) {
-    GETTENSOR(dataset_ptr)
+    GET_TENSOR_DATA_DIM(dataset_ptr)
     gpu_id_ = config[knowhere::meta::DEVICEID];
 
     std::stringstream index_type;
@@ -43,21 +44,16 @@ IVFSQHybrid::Train(const DatasetPtr& dataset_ptr, const Config& config) {
     if (gpu_res != nullptr) {
         ResScope rs(gpu_res, gpu_id_, true);
         auto device_index = faiss::gpu::index_cpu_to_gpu(gpu_res->faiss_res.get(), gpu_id_, build_index);
-        device_index->train(rows, (float*)p_data);
+        device_index->train(rows, reinterpret_cast<const float*>(p_data));
 
-        std::shared_ptr<faiss::Index> host_index = nullptr;
-        host_index.reset(faiss::gpu::index_gpu_to_cpu(device_index));
-
-        delete device_index;
-        delete build_index;
-
-        device_index = faiss::gpu::index_cpu_to_gpu(gpu_res->faiss_res.get(), gpu_id_, host_index.get());
         index_.reset(device_index);
         res_ = gpu_res;
         gpu_mode_ = 2;
     } else {
         KNOWHERE_THROW_MSG("Build IVFSQHybrid can't get gpu resource");
     }
+
+    delete build_index;
 }
 
 VecIndexPtr
@@ -71,9 +67,7 @@ IVFSQHybrid::CopyGpuToCpu(const Config& config) {
     faiss::Index* host_index = faiss::gpu::index_gpu_to_cpu(device_index);
 
     if (auto* ivf_index = dynamic_cast<faiss::IndexIVF*>(host_index)) {
-        if (ivf_index != nullptr) {
-            ivf_index->to_readonly();
-        }
+        ivf_index->to_readonly();
         ivf_index->backup_quantizer();
     }
 
@@ -138,8 +132,9 @@ IVFSQHybrid::LoadData(const knowhere::QuantizerPtr& quantizer_ptr, const Config&
         option.allInGpu = true;
 
         auto ivf_quantizer = std::dynamic_pointer_cast<FaissIVFQuantizer>(quantizer_ptr);
-        if (ivf_quantizer == nullptr)
+        if (ivf_quantizer == nullptr) {
             KNOWHERE_THROW_MSG("quantizer type not faissivfquantizer");
+        }
 
         auto index_composition = new faiss::IndexComposition;
         index_composition->index = index_.get();
@@ -194,9 +189,9 @@ IVFSQHybrid::SetQuantizer(const QuantizerPtr& quantizer_ptr) {
         KNOWHERE_THROW_MSG("Quantizer type error");
     }
 
-    faiss::IndexIVF* ivf_index = dynamic_cast<faiss::IndexIVF*>(index_.get());
+    auto ivf_index = dynamic_cast<faiss::IndexIVF*>(index_.get());
 
-    faiss::gpu::GpuIndexFlat* is_gpu_flat_index = dynamic_cast<faiss::gpu::GpuIndexFlat*>(ivf_index->quantizer);
+    auto is_gpu_flat_index = dynamic_cast<faiss::gpu::GpuIndexFlat*>(ivf_index->quantizer);
     if (is_gpu_flat_index == nullptr) {
         //        delete ivf_index->quantizer;
         ivf_index->quantizer = ivf_quantizer->quantizer;
@@ -264,6 +259,20 @@ IVFSQHybrid::QueryImpl(int64_t n, const float* data, int64_t k, float* distances
     } else if (gpu_mode_ == 0) {
         IVF::QueryImpl(n, data, k, distances, labels, config);
     }
+}
+
+void
+IVFSQHybrid::UpdateIndexSize() {
+    if (!index_) {
+        KNOWHERE_THROW_MSG("index not initialize");
+    }
+    auto ivfsqh_index = dynamic_cast<faiss::IndexIVFSQHybrid*>(index_.get());
+    auto nb = ivfsqh_index->invlists->compute_ntotal();
+    auto code_size = ivfsqh_index->code_size;
+    auto nlist = ivfsqh_index->nlist;
+    auto d = ivfsqh_index->d;
+    // ivf codes, ivf ids, sq trained vectors and quantizer
+    index_size_ = nb * code_size + nb * sizeof(int64_t) + 2 * d * sizeof(float) + nlist * d * sizeof(float);
 }
 
 FaissIVFQuantizer::~FaissIVFQuantizer() {

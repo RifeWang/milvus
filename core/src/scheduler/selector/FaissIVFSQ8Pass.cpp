@@ -11,7 +11,9 @@
 #ifdef MILVUS_GPU_VERSION
 #include "scheduler/selector/FaissIVFSQ8Pass.h"
 #include "cache/GpuCacheMgr.h"
-#include "config/Config.h"
+#include "config/ServerConfig.h"
+#include "faiss/gpu/utils/DeviceUtils.h"
+#include "knowhere/index/vector_index/helpers/IndexParameter.h"
 #include "scheduler/SchedInst.h"
 #include "scheduler/Utils.h"
 #include "scheduler/task/SearchTask.h"
@@ -21,23 +23,20 @@
 namespace milvus {
 namespace scheduler {
 
+FaissIVFSQ8Pass::FaissIVFSQ8Pass() {
+    ConfigMgr::GetInstance().Attach("gpu.gpu_search_threshold", this);
+}
+
+FaissIVFSQ8Pass::~FaissIVFSQ8Pass() {
+    ConfigMgr::GetInstance().Detach("gpu.gpu_search_threshold", this);
+}
+
 void
 FaissIVFSQ8Pass::Init() {
 #ifdef MILVUS_GPU_VERSION
-    server::Config& config = server::Config::GetInstance();
-    Status s = config.GetGpuResourceConfigGpuSearchThreshold(threshold_);
-    if (!s.ok()) {
-        threshold_ = std::numeric_limits<int32_t>::max();
-    }
-    s = config.GetGpuResourceConfigSearchResources(search_gpus_);
-    if (!s.ok()) {
-        throw std::exception();
-    }
-
-    SetIdentity("FaissIVFSQ8Pass");
-    AddGpuEnableListener();
-    AddGpuSearchThresholdListener();
-    AddGpuSearchResourcesListener();
+    gpu_enable_ = config.gpu.enable();
+    threshold_ = config.gpu.gpu_search_threshold();
+    search_gpus_ = ParseGPUDevices(config.gpu.search_devices());
 #endif
 }
 
@@ -47,29 +46,36 @@ FaissIVFSQ8Pass::Run(const TaskPtr& task) {
         return false;
     }
 
-    auto search_task = std::static_pointer_cast<XSearchTask>(task);
-    if (search_task->file_->engine_type_ != (int)engine::EngineType::FAISS_IVFSQ8) {
+    auto search_task = std::static_pointer_cast<SearchTask>(task);
+    if (search_task->IndexType() != knowhere::IndexEnum::INDEX_FAISS_IVFSQ8) {
         return false;
     }
 
-    auto search_job = std::static_pointer_cast<SearchJob>(search_task->job_.lock());
     ResourcePtr res_ptr;
     if (!gpu_enable_) {
-        LOG_SERVER_DEBUG_ << LogOut("[%s][%d] FaissIVFSQ8Pass: gpu disable, specify cpu to search!", "search", 0);
+        LOG_SERVER_DEBUG_ << LogOut("FaissIVFSQ8Pass: gpu disable, specify cpu to search!");
         res_ptr = ResMgrInst::GetInstance()->GetResource("cpu");
-    } else if (search_job->nq() < (uint64_t)threshold_) {
-        LOG_SERVER_DEBUG_ << LogOut("[%s][%d] FaissIVFSQ8Pass: nq < gpu_search_threshold, specify cpu to search!",
-                                    "search", 0);
+    } else if (search_task->nq() < threshold_) {
+        LOG_SERVER_DEBUG_ << LogOut("FaissIVFSQ8Pass: nq < gpu_search_threshold, specify cpu to search!");
+        res_ptr = ResMgrInst::GetInstance()->GetResource("cpu");
+    } else if (search_task->ExtraParam()[knowhere::IndexParams::nprobe].get<int64_t>() >
+               faiss::gpu::getMaxKSelection()) {
+        LOG_SERVER_DEBUG_ << LogOut("FaissIVFFlatPass: nprobe > gpu_max_nprobe_threshold, specify cpu to search!");
         res_ptr = ResMgrInst::GetInstance()->GetResource("cpu");
     } else {
-        LOG_SERVER_DEBUG_ << LogOut("[%s][%d] FaissIVFSQ8Pass: nq >= gpu_search_threshold, specify gpu %d to search!",
-                                    "search", 0, search_gpus_[idx_]);
+        LOG_SERVER_DEBUG_ << LogOut("FaissIVFSQ8Pass: nq >= gpu_search_threshold, specify gpu %d to search!",
+                                    search_gpus_[idx_]);
         res_ptr = ResMgrInst::GetInstance()->GetResource(ResourceType::GPU, search_gpus_[idx_]);
         idx_ = (idx_ + 1) % search_gpus_.size();
     }
     auto label = std::make_shared<SpecResLabel>(res_ptr);
     task->label() = label;
     return true;
+}
+
+void
+FaissIVFSQ8Pass::ConfigUpdate(const std::string& name) {
+    threshold_ = config.gpu.gpu_search_threshold();
 }
 
 }  // namespace scheduler

@@ -4,7 +4,6 @@ import threading
 import logging
 from multiprocessing import Pool, Process
 import pytest
-from milvus import IndexType, MetricType
 from utils import *
 
 dim = 128
@@ -12,8 +11,41 @@ index_file_size = 10
 COMPACT_TIMEOUT = 180
 nprobe = 1
 top_k = 1
-tag = "1970-01-01"
+tag = "1970_01_01"
 nb = 6000
+nq = 2
+segment_row_count = 5000
+entity = gen_entities(1)
+entities = gen_entities(nb)
+raw_vector, binary_entity = gen_binary_entities(1)
+raw_vectors, binary_entities = gen_binary_entities(nb)
+default_fields = gen_default_fields()
+default_binary_fields = gen_binary_default_fields()
+field_name = default_float_vec_field_name
+binary_field_name = default_binary_vec_field_name
+default_single_query = {
+    "bool": {
+        "must": [
+            {"vector": {field_name: {"topk": 10, "query": gen_vectors(1, dim), "metric_type":"L2",
+                                     "params": {"nprobe": 10}}}}
+        ]
+    }
+}
+default_binary_single_query = {
+    "bool": {
+        "must": [
+            {"vector": {binary_field_name: {"topk": 10, "query": gen_binary_vectors(1, dim), "metric_type":"JACCARD",
+                                     "params": {"nprobe": 10}}}}
+        ]
+    }
+}
+default_query, default_query_vecs = gen_query_vectors(binary_field_name, binary_entities, top_k, nq)
+
+
+def ip_query():
+    query = copy.deepcopy(default_single_query)
+    query["bool"]["must"][0]["vector"][field_name].update({"metric_type": "IP"})
+    return query
 
 
 class TestCompactBase:
@@ -38,15 +70,15 @@ class TestCompactBase:
         '''
         target: compact collection not existed
         method: compact with a random collection_name, which is not in db
-        expected: status not ok
+        expected: exception raised
         '''
-        collection_name = gen_unique_str("not_existed_collection")
-        status = connect.compact(collection_name)
-        assert not status.OK()
+        collection_name = gen_unique_str("not_existed")
+        with pytest.raises(Exception) as e:
+            status = connect.compact(collection_name)
     
     @pytest.fixture(
         scope="function",
-        params=gen_invalid_collection_names()
+        params=gen_invalid_strs()
     )
     def get_collection_name(self, request):
         yield request.param
@@ -56,153 +88,134 @@ class TestCompactBase:
         '''
         target: compact collection with invalid name
         method: compact with invalid collection_name
-        expected: status not ok
+        expected: exception raised
         '''
         collection_name = get_collection_name
-        status = connect.compact(collection_name)
-        assert not status.OK()
+        with pytest.raises(Exception) as e:
+            status = connect.compact(collection_name)
+            # assert not status.OK()
     
+    @pytest.mark.level(2)
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact(self, connect, collection):
+    def test_add_entity_and_compact(self, connect, collection):
         '''
-        target: test add vector and compact 
-        method: add vector and compact collection
-        expected: status ok, vector added
+        target: test add entity and compact
+        method: add entity and compact collection
+        expected: data_size before and after Compact
         '''
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(collection, vector)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        # vector = gen_single_vector(dim)
+        ids = connect.insert(collection, entity)
+        assert len(ids) == 1
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
-    
+
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_insert_and_compact(self, connect, collection):
         '''
-        target: test add vectors and compact 
-        method: add vectors and compact collection
-        expected: status ok, vectors added
+        target: test add entities and compact 
+        method: add entities and compact collection
+        expected: data_size before and after Compact
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        # entities = gen_vector(nb, dim)
+        ids = connect.insert(collection, entities)
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
+        # assert status.OK()
         size_before = info["partitions"][0]["segments"][0]["data_size"]
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
+        # assert status.OK()
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_insert_delete_part_and_compact(self, connect, collection):
         '''
-        target: test add vectors, delete part of them and compact 
-        method: add vectors, delete a few and compact collection
-        expected: status ok, data size is smaller after compact
+        target: test add entities, delete part of them and compact
+        method: add entities, delete a few and compact collection
+        expected: status ok, data size maybe is smaller after compact
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
         delete_ids = [ids[0], ids[-1]]
         status = connect.delete_entity_by_id(collection, delete_ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
+        size_before = info["partitions"][0]["data_size"]
         logging.getLogger().info(size_before)
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
+        size_after = info["partitions"][0]["data_size"]
         logging.getLogger().info(size_after)
         assert(size_before >= size_after)
     
+    @pytest.mark.level(2)
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_insert_delete_all_and_compact(self, connect, collection):
         '''
-        target: test add vectors, delete them and compact 
-        method: add vectors, delete all and compact collection
+        target: test add entities, delete them and compact 
+        method: add entities, delete all and compact collection
         expected: status ok, no data size in collection info because collection is empty
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
         status = connect.delete_entity_by_id(collection, ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
         assert not info["partitions"][0]["segments"]
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_insert_partition_delete_half_and_compact(self, connect, collection):
         '''
-        target: test add vectors into partition, delete them and compact 
-        method: add vectors, delete half of vectors in partition and compact collection
+        target: test add entities into partition, delete them and compact 
+        method: add entities, delete half of entities in partition and compact collection
         expected: status ok, data_size less than the older version
         '''
-        vectors = gen_vector(nb, dim)
-        status = connect.create_partition(collection, tag)
-        assert status.OK()
-        status, ids = connect.insert(collection, vectors, partition_tag=tag)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        connect.create_partition(collection, tag)
+        assert connect.has_partition(collection, tag)
+        ids = connect.insert(collection, entities, partition_tag=tag)
+        connect.flush([collection])
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
 
         delete_ids = ids[:3000]
         status = connect.delete_entity_by_id(collection, delete_ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info_after = connect.get_collection_stats(collection)
-        assert status.OK()
+        info_after = connect.get_collection_stats(collection)
         logging.getLogger().info(info_after["partitions"])
         assert info["partitions"][1]["segments"][0]["data_size"] > info_after["partitions"][1]["segments"][0]["data_size"]
 
@@ -211,171 +224,141 @@ class TestCompactBase:
         params=gen_simple_index()
     )
     def get_simple_index(self, request, connect):
-        if str(connect._cmd("mode")[1]) == "CPU":
-            if request.param["index_type"] not in [IndexType.IVF_SQ8, IndexType.IVFLAT, IndexType.FLAT, IndexType.IVF_PQ, IndexType.HNSW]:
-                pytest.skip("Only support index_type: flat/ivf_flat/ivf_sq8")
-        else:
-            pytest.skip("Only support CPU mode")
+        if str(connect._cmd("mode")) == "GPU":
+            if not request.param["index_type"] not in ivf():
+                pytest.skip("Only support index_type: idmap/ivf")
+        if str(connect._cmd("mode")) == "CPU":
+            if request.param["index_type"] in index_cpu_not_support():
+                pytest.skip("CPU not support index_type: ivf_sq8h")
         return request.param
 
+    @pytest.mark.level(2)
     def test_compact_after_index_created(self, connect, collection, get_simple_index):
         '''
         target: test compact collection after index created
-        method: add vectors, create index, delete part of vectors and compact
+        method: add entities, create index, delete part of entities and compact
         expected: status ok, index description no change, data size smaller after compact
         '''
         count = 10
-        index_param = get_simple_index["index_param"]
-        index_type = get_simple_index["index_type"]
-        vectors = gen_vector(count, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
-        status = connect.create_index(collection, index_type, index_param) 
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        connect.flush([collection])
+        connect.create_index(collection, field_name, get_simple_index)
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
         logging.getLogger().info(info["partitions"])
-        delete_ids = [ids[0], ids[-1]]
+        delete_ids = ids[:1500]
         status = connect.delete_entity_by_id(collection, delete_ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         logging.getLogger().info(info["partitions"])
         size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before > size_after)
-    
+        assert(size_before >= size_after)
+
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact_twice(self, connect, collection):
+    def test_add_entity_and_compact_twice(self, connect, collection):
         '''
-        target: test add vector and compact twice
-        method: add vector and compact collection twice
+        target: test add entity and compact twice
+        method: add entity and compact collection twice
         expected: status ok, data size no change
         '''
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(collection, vector)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entity)
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
         status = connect.compact(collection)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact twice
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_after == size_after_twice)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_insert_delete_part_and_compact_twice(self, connect, collection):
         '''
-        target: test add vectors, delete part of them and compact twice
-        method: add vectors, delete part and compact collection twice
+        target: test add entities, delete part of them and compact twice
+        method: add entities, delete part and compact collection twice
         expected: status ok, data size smaller after first compact, no change after second
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        connect.flush([collection])
         delete_ids = [ids[0], ids[-1]]
         status = connect.delete_entity_by_id(collection, delete_ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
+        info = connect.get_collection_stats(collection)
+        size_before = info["partitions"][0]["data_size"]
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
+        info = connect.get_collection_stats(collection)
+        size_after = info["partitions"][0]["data_size"]
         assert(size_before >= size_after)
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact twice
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
-        size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
+        info = connect.get_collection_stats(collection)
+        size_after_twice = info["partitions"][0]["data_size"]
         assert(size_after == size_after_twice)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_compact_multi_collections(self, connect):
         '''
         target: test compact works or not with multiple collections
-        method: create 50 collections, add vectors into them and compact in turn
+        method: create 50 collections, add entities into them and compact in turn
         expected: status ok
         '''
-        nq = 100
-        num_collections = 50
-        vectors = gen_vectors(nq, dim)
+        nb = 100
+        num_collections = 20
+        entities = gen_entities(nb)
         collection_list = []
         for i in range(num_collections):
             collection_name = gen_unique_str("test_compact_multi_collection_%d" % i)
             collection_list.append(collection_name)
-            param = {'collection_name': collection_name,
-                     'dimension': dim,
-                     'index_file_size': index_file_size,
-                     'metric_type': MetricType.L2}
-            connect.create_collection(param)
-        time.sleep(6)
+            connect.create_collection(collection_name, default_fields)
         for i in range(num_collections):
-            status, ids = connect.insert(collection_name=collection_list[i], records=vectors)
-            assert status.OK()
+            ids = connect.insert(collection_list[i], entities)
+            connect.delete_entity_by_id(collection_list[i], ids[:nb//2])
             status = connect.compact(collection_list[i])
             assert status.OK()
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_after_compact(self, connect, collection):
+    def test_add_entity_after_compact(self, connect, collection):
         '''
-        target: test add vector after compact 
-        method: after compact operation, add vector
-        expected: status ok, vector added
+        target: test add entity after compact
+        method: after compact operation, add entity
+        expected: status ok, entity added
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
         status = connect.compact(collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
+        info = connect.get_collection_stats(collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(collection, vector)
-        assert status.OK()
+        ids = connect.insert(collection, entity)
+        connect.flush([collection])
+        res = connect.count_entities(collection)
+        assert res == nb+1
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_index_creation_after_compact(self, connect, collection, get_simple_index):
@@ -384,45 +367,34 @@ class TestCompactBase:
         method: after compact operation, create index
         expected: status ok, index description no change
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        connect.flush([collection])
         status = connect.delete_entity_by_id(collection, ids[:10])
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         status = connect.compact(collection)
         assert status.OK()
-        index_param = get_simple_index["index_param"]
-        index_type = get_simple_index["index_type"]
-        status = connect.create_index(collection, index_type, index_param) 
+        status = connect.create_index(collection, field_name, get_simple_index)
         assert status.OK()
-        status, result = connect.get_index_info(collection)
-        assert result._collection_name == collection
-        assert result._index_type == index_type
+        # status, result = connect.get_index_info(collection)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_delete_vectors_after_compact(self, connect, collection):
+    def test_delete_entities_after_compact(self, connect, collection):
         '''
-        target: test delete vectors after compact
-        method: after compact operation, delete vectors
-        expected: status ok, vectors deleted
+        target: test delete entities after compact
+        method: after compact operation, delete entities
+        expected: status ok, entities deleted
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
         status = connect.compact(collection)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
         status = connect.delete_entity_by_id(collection, ids)
         assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        connect.flush([collection])
+        assert connect.count_entities(collection) == 0
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_search_after_compact(self, connect, collection):
@@ -431,600 +403,283 @@ class TestCompactBase:
         method: after compact operation, search vector
         expected: status ok
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
         status = connect.compact(collection)
         assert status.OK()
-        query_vecs = [vectors[0]]
-        status, res = connect.search(collection, top_k, query_records=query_vecs) 
-        logging.getLogger().info(res)
-        assert status.OK()
-
-    # TODO: enable
-    def _test_compact_server_crashed_recovery(self, connect, collection):
-        '''
-        target: test compact when server crashed unexpectedly and restarted
-        method: add vectors, delete and compact collection; server stopped and restarted during compact
-        expected: status ok, request recovered
-        '''
-        vectors = gen_vector(nb * 100, dim)
-        status, ids = connect.insert(collection, vectors)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
-        delete_ids = ids[0:1000]
-        status = connect.delete_entity_by_id(collection, delete_ids)
-        assert status.OK()
-        status = connect.flush([collection])
-        assert status.OK()
-        # start to compact, kill and restart server
-        logging.getLogger().info("compact starting...")
-        status = connect.compact(collection)
-        # pdb.set_trace()
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(collection)
-        assert status.OK()
-        assert info["partitions"][0].count == nb * 100 - 1000
+        query = copy.deepcopy(default_single_query)
+        query["bool"]["must"][0]["vector"][field_name]["query"] = [entity[-1]["values"][0], entities[-1]["values"][0],
+                                                                   entities[-1]["values"][-1]]
+        res = connect.search(collection, query)
+        logging.getLogger().debug(res)
+        assert len(res) == len(query["bool"]["must"][0]["vector"][field_name]["query"])
+        assert res[0]._distances[0] > epsilon
+        assert res[1]._distances[0] < epsilon
+        assert res[2]._distances[0] < epsilon
 
 
-class TestCompactJAC:
+class TestCompactBinary:
     """
     ******************************************************************
       The following cases are used to test `compact` function
     ******************************************************************
     """
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact(self, connect, jac_collection):
+    def test_add_entity_and_compact(self, connect, binary_collection):
         '''
-        target: test add vector and compact 
+        target: test add binary vector and compact
         method: add vector and compact collection
         expected: status ok, vector added
         '''
-        tmp, vector = gen_binary_vectors(1, dim)
-        status, ids = connect.insert(jac_collection, vector)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entity)
+        assert len(ids) == 1
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before == size_after)
-    
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_and_compact(self, connect, jac_collection):
-        '''
-        target: test add vectors and compact 
-        method: add vectors and compact collection
-        expected: status ok, vectors added
-        '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(jac_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_part_and_compact(self, connect, jac_collection):
+    def test_insert_and_compact(self, connect, binary_collection):
         '''
-        target: test add vectors, delete part of them and compact 
-        method: add vectors, delete a few and compact collection
-        expected: status ok, data size is smaller after compact
+        target: test add entities with binary vector and compact
+        method: add entities and compact collection
+        expected: status ok, entities added
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
-        delete_ids = [ids[0], ids[-1]]
-        status = connect.delete_entity_by_id(jac_collection, delete_ids)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entities)
+        assert len(ids) == nb
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        logging.getLogger().info(info["partitions"])
+        info = connect.get_collection_stats(binary_collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
-        logging.getLogger().info(size_before)
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        logging.getLogger().info(info["partitions"])
+        info = connect.get_collection_stats(binary_collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
+        assert(size_before == size_after)
+
+    @pytest.mark.timeout(COMPACT_TIMEOUT)
+    def test_insert_delete_part_and_compact(self, connect, binary_collection):
+        '''
+        target: test add entities, delete part of them and compact 
+        method: add entities, delete a few and compact collection
+        expected: status ok, data size is smaller after compact
+        '''
+        ids = connect.insert(binary_collection, binary_entities)
+        assert len(ids) == nb
+        connect.flush([binary_collection])
+        delete_ids = [ids[0], ids[-1]]
+        status = connect.delete_entity_by_id(binary_collection, delete_ids)
+        assert status.OK()
+        connect.flush([binary_collection])
+        # get collection info before compact
+        info = connect.get_collection_stats(binary_collection)
+        logging.getLogger().info(info["partitions"])
+        size_before = info["partitions"][0]["data_size"]
+        logging.getLogger().info(size_before)
+        status = connect.compact(binary_collection)
+        assert status.OK()
+        # get collection info after compact
+        info = connect.get_collection_stats(binary_collection)
+        logging.getLogger().info(info["partitions"])
+        size_after = info["partitions"][0]["data_size"]
         logging.getLogger().info(size_after)
         assert(size_before >= size_after)
     
+    @pytest.mark.level(2)
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_all_and_compact(self, connect, jac_collection):
+    def test_insert_delete_all_and_compact(self, connect, binary_collection):
         '''
-        target: test add vectors, delete them and compact 
-        method: add vectors, delete all and compact collection
+        target: test add entities, delete them and compact 
+        method: add entities, delete all and compact collection
         expected: status ok, no data size in collection info because collection is empty
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
+        ids = connect.insert(binary_collection, binary_entities)
+        assert len(ids) == nb
+        connect.flush([binary_collection])
+        status = connect.delete_entity_by_id(binary_collection, ids)
         assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
-        status = connect.delete_entity_by_id(jac_collection, ids)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        status = connect.compact(jac_collection)
+        info = connect.get_collection_stats(binary_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
+        info = connect.get_collection_stats(binary_collection)
         assert status.OK()
         logging.getLogger().info(info["partitions"])
         assert not info["partitions"][0]["segments"]
-    
+
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact_twice(self, connect, jac_collection):
+    def test_add_entity_and_compact_twice(self, connect, binary_collection):
         '''
-        target: test add vector and compact twice
-        method: add vector and compact collection twice
+        target: test add entity and compact twice
+        method: add entity and compact collection twice
         expected: status ok
         '''
-        tmp, vector = gen_binary_vectors(1, dim)
-        status, ids = connect.insert(jac_collection, vector)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entity)
+        assert len(ids) == 1
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact twice
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_after == size_after_twice)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_part_and_compact_twice(self, connect, jac_collection):
+    def test_insert_delete_part_and_compact_twice(self, connect, binary_collection):
         '''
-        target: test add vectors, delete part of them and compact twice
-        method: add vectors, delete part and compact collection twice
+        target: test add entities, delete part of them and compact twice
+        method: add entities, delete part and compact collection twice
         expected: status ok, data size smaller after first compact, no change after second
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entities)
+        assert len(ids) == nb
+        connect.flush([binary_collection])
         delete_ids = [ids[0], ids[-1]]
-        status = connect.delete_entity_by_id(jac_collection, delete_ids)
+        status = connect.delete_entity_by_id(binary_collection, delete_ids)
         assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(jac_collection)
+        info = connect.get_collection_stats(binary_collection)
+        size_before = info["partitions"][0]["data_size"]
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
+        info = connect.get_collection_stats(binary_collection)
+        size_after = info["partitions"][0]["data_size"]
         assert(size_before >= size_after)
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact twice
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
-        size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
+        info = connect.get_collection_stats(binary_collection)
+        size_after_twice = info["partitions"][0]["data_size"]
         assert(size_after == size_after_twice)
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
     def test_compact_multi_collections(self, connect):
         '''
         target: test compact works or not with multiple collections
-        method: create 50 collections, add vectors into them and compact in turn
+        method: create 10 collections, add entities into them and compact in turn
         expected: status ok
         '''
         nq = 100
         num_collections = 10
-        tmp, vectors = gen_binary_vectors(nq, dim)
+        tmp, entities = gen_binary_entities(nq)
         collection_list = []
         for i in range(num_collections):
             collection_name = gen_unique_str("test_compact_multi_collection_%d" % i)
             collection_list.append(collection_name)
-            param = {'collection_name': collection_name,
-                     'dimension': dim,
-                     'index_file_size': index_file_size,
-                     'metric_type': MetricType.JACCARD}
-            connect.create_collection(param)
+            connect.create_collection(collection_name, default_binary_fields)
         for i in range(num_collections):
-            status, ids = connect.insert(collection_name=collection_list[i], records=vectors)
-            assert status.OK()
+            ids = connect.insert(collection_list[i], entities)
+            assert len(ids) == nq
             status = connect.delete_entity_by_id(collection_list[i], [ids[0], ids[-1]])
             assert status.OK()
-            status = connect.flush([collection_list[i]])
-            assert status.OK()
+            connect.flush([collection_list[i]])
             status = connect.compact(collection_list[i])
             assert status.OK()
             status = connect.drop_collection(collection_list[i])
             assert status.OK()
 
+    @pytest.mark.level(2)
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_after_compact(self, connect, jac_collection):
+    def test_add_entity_after_compact(self, connect, binary_collection):
         '''
-        target: test add vector after compact 
-        method: after compact operation, add vector
-        expected: status ok, vector added
+        target: test add entity after compact
+        method: after compact operation, add entity
+        expected: status ok, entity added
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entities)
+        connect.flush([binary_collection])
         # get collection info before compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(jac_collection)
+        status = connect.compact(binary_collection)
         assert status.OK()
         # get collection info after compact
-        status, info = connect.get_collection_stats(jac_collection)
-        assert status.OK()
+        info = connect.get_collection_stats(binary_collection)
         size_after = info["partitions"][0]["segments"][0]["data_size"]
         assert(size_before == size_after)
-        tmp, vector = gen_binary_vectors(1, dim)
-        status, ids = connect.insert(jac_collection, vector)
-        assert status.OK()
+        ids = connect.insert(binary_collection, binary_entity)
+        connect.flush([binary_collection])
+        res = connect.count_entities(binary_collection)
+        assert res == nb + 1
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_delete_vectors_after_compact(self, connect, jac_collection):
+    def test_delete_entities_after_compact(self, connect, binary_collection):
         '''
-        target: test delete vectors after compact
-        method: after compact operation, delete vectors
-        expected: status ok, vectors deleted
+        target: test delete entities after compact
+        method: after compact operation, delete entities
+        expected: status ok, entities deleted
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
+        ids = connect.insert(binary_collection, binary_entities)
+        connect.flush([binary_collection])
+        status = connect.compact(binary_collection)
         assert status.OK()
-        status = connect.flush([jac_collection])
+        connect.flush([binary_collection])
+        status = connect.delete_entity_by_id(binary_collection, ids)
         assert status.OK()
-        status = connect.compact(jac_collection)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
-        status = connect.delete_entity_by_id(jac_collection, ids)
-        assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
+        connect.flush([binary_collection])
+        res = connect.count_entities(binary_collection)
+        assert res == 0
 
+    @pytest.mark.level(2)
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_search_after_compact(self, connect, jac_collection):
+    def test_search_after_compact(self, connect, binary_collection):
         '''
         target: test search after compact
         method: after compact operation, search vector
         expected: status ok
         '''
-        tmp, vectors = gen_binary_vectors(nb, dim)
-        status, ids = connect.insert(jac_collection, vectors)
+        ids = connect.insert(binary_collection, binary_entities)
+        assert len(ids) == nb
+        connect.flush([binary_collection])
+        status = connect.compact(binary_collection)
         assert status.OK()
-        status = connect.flush([jac_collection])
-        assert status.OK()
-        status = connect.compact(jac_collection)
-        assert status.OK()
-        query_vecs = [vectors[0]]
-        status, res = connect.search(jac_collection, top_k, query_records=query_vecs) 
-        logging.getLogger().info(res)
-        assert status.OK()
+        query_vecs = [raw_vectors[0]]
+        distance = jaccard(query_vecs[0], raw_vectors[0])
+        query = copy.deepcopy(default_binary_single_query)
+        query["bool"]["must"][0]["vector"][binary_field_name]["query"] = [binary_entities[-1]["values"][0],
+                                                                   binary_entities[-1]["values"][-1]]
 
-
-class TestCompactIP:
-    """
-    ******************************************************************
-      The following cases are used to test `compact` function
-    ******************************************************************
-    """
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact(self, connect, ip_collection):
-        '''
-        target: test add vector and compact 
-        method: add vector and compact collection
-        expected: status ok, vector added
-        '''
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(ip_collection, vector)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before == size_after)
-    
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_and_compact(self, connect, ip_collection):
-        '''
-        target: test add vectors and compact 
-        method: add vectors and compact collection
-        expected: status ok, vectors added
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before == size_after)
+        res = connect.search(binary_collection, query)
+        assert abs(res[0]._distances[0]-distance) <= epsilon
 
     @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_part_and_compact(self, connect, ip_collection):
-        '''
-        target: test add vectors, delete part of them and compact 
-        method: add vectors, delete a few and compact collection
-        expected: status ok, data size is smaller after compact
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        delete_ids = [ids[0], ids[-1]]
-        status = connect.delete_entity_by_id(ip_collection, delete_ids)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        logging.getLogger().info(info["partitions"])
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        logging.getLogger().info(size_before)
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        logging.getLogger().info(info["partitions"])
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        logging.getLogger().info(size_after)
-        assert(size_before >= size_after)
-    
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_all_and_compact(self, connect, ip_collection):
-        '''
-        target: test add vectors, delete them and compact 
-        method: add vectors, delete all and compact collection
-        expected: status ok, no data size in collection info because collection is empty
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        status = connect.delete_entity_by_id(ip_collection, ids)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        logging.getLogger().info(info["partitions"])
-        assert not info["partitions"][0]["segments"]
-    
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_and_compact_twice(self, connect, ip_collection):
-        '''
-        target: test add vector and compact twice
-        method: add vector and compact collection twice
-        expected: status ok
-        '''
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(ip_collection, vector)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before == size_after)
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact twice
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_after == size_after_twice)
-
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_insert_delete_part_and_compact_twice(self, connect, ip_collection):
-        '''
-        target: test add vectors, delete part of them and compact twice
-        method: add vectors, delete part and compact collection twice
-        expected: status ok, data size smaller after first compact, no change after second
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        delete_ids = [ids[0], ids[-1]]
-        status = connect.delete_entity_by_id(ip_collection, delete_ids)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before >= size_after)
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info after compact twice
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after_twice = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_after == size_after_twice)
-
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_compact_multi_collections(self, connect):
-        '''
-        target: test compact works or not with multiple collections
-        method: create 50 collections, add vectors into them and compact in turn
-        expected: status ok
-        '''
-        nq = 100
-        num_collections = 50
-        vectors = gen_vectors(nq, dim)
-        collection_list = []
-        for i in range(num_collections):
-            collection_name = gen_unique_str("test_compact_multi_collection_%d" % i)
-            collection_list.append(collection_name)
-            param = {'collection_name': collection_name,
-                     'dimension': dim,
-                     'index_file_size': index_file_size,
-                     'metric_type': MetricType.IP}
-            connect.create_collection(param)
-        time.sleep(6)
-        for i in range(num_collections):
-            status, ids = connect.insert(collection_name=collection_list[i], records=vectors)
-            assert status.OK()
-            status = connect.compact(collection_list[i])
-            assert status.OK()
-
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_add_vector_after_compact(self, connect, ip_collection):
-        '''
-        target: test add vector after compact 
-        method: after compact operation, add vector
-        expected: status ok, vector added
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        # get collection info before compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_before = info["partitions"][0]["segments"][0]["data_size"]
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        # get collection info after compact
-        status, info = connect.get_collection_stats(ip_collection)
-        assert status.OK()
-        size_after = info["partitions"][0]["segments"][0]["data_size"]
-        assert(size_before == size_after)
-        vector = gen_single_vector(dim)
-        status, ids = connect.insert(ip_collection, vector)
-        assert status.OK()
-
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_delete_vectors_after_compact(self, connect, ip_collection):
-        '''
-        target: test delete vectors after compact
-        method: after compact operation, delete vectors
-        expected: status ok, vectors deleted
-        '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        status = connect.delete_entity_by_id(ip_collection, ids)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-
-    @pytest.mark.timeout(COMPACT_TIMEOUT)
-    def test_search_after_compact(self, connect, ip_collection):
+    def test_search_after_compact_ip(self, connect, collection):
         '''
         target: test search after compact
         method: after compact operation, search vector
         expected: status ok
         '''
-        vectors = gen_vector(nb, dim)
-        status, ids = connect.insert(ip_collection, vectors)
-        assert status.OK()
-        status = connect.flush([ip_collection])
-        assert status.OK()
-        status = connect.compact(ip_collection)
-        assert status.OK()
-        query_vecs = [vectors[0]]
-        status, res = connect.search(ip_collection, top_k, query_records=query_vecs) 
+        ids = connect.insert(collection, entities)
+        assert len(ids) == nb
+        connect.flush([collection])
+        status = connect.compact(collection)
+        query = ip_query()
+        query["bool"]["must"][0]["vector"][field_name]["query"] = [entity[-1]["values"][0], entities[-1]["values"][0],
+                                                                   entities[-1]["values"][-1]]
+        res = connect.search(collection, query)
         logging.getLogger().info(res)
-        assert status.OK()
+        assert len(res) == len(query["bool"]["must"][0]["vector"][field_name]["query"])
+        assert res[0]._distances[0] < 1 - epsilon
+        assert res[1]._distances[0] > 1 - epsilon
+        assert res[2]._distances[0] > 1 - epsilon

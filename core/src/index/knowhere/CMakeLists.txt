@@ -13,6 +13,7 @@
 
 include_directories(${INDEX_SOURCE_DIR}/knowhere)
 include_directories(${INDEX_SOURCE_DIR}/thirdparty)
+include_directories(${INDEX_SOURCE_DIR}/thirdparty/NGT/lib)
 
 if (MILVUS_SUPPORT_SPTAG)
     include_directories(${INDEX_SOURCE_DIR}/thirdparty/SPTAG/AnnService)
@@ -42,7 +43,7 @@ set(external_srcs
         knowhere/common/Timer.cpp
         )
 
-set(index_srcs
+set(vector_index_srcs
         knowhere/index/vector_index/adapter/VectorAdapter.cpp
         knowhere/index/vector_index/helpers/FaissIO.cpp
         knowhere/index/vector_index/helpers/IndexParameter.cpp
@@ -56,23 +57,35 @@ set(index_srcs
         knowhere/index/vector_index/FaissBaseIndex.cpp
         knowhere/index/vector_index/IndexBinaryIDMAP.cpp
         knowhere/index/vector_index/IndexBinaryIVF.cpp
-        knowhere/index/vector_index/IndexHNSW.cpp
         knowhere/index/vector_index/IndexIDMAP.cpp
         knowhere/index/vector_index/IndexIVF.cpp
         knowhere/index/vector_index/IndexIVFPQ.cpp
         knowhere/index/vector_index/IndexIVFSQ.cpp
-        knowhere/index/vector_index/IndexNSG.cpp
-        knowhere/index/vector_index/IndexType.cpp
+        knowhere/index/IndexType.cpp
         knowhere/index/vector_index/VecIndexFactory.cpp
         knowhere/index/vector_index/IndexAnnoy.cpp
+        knowhere/index/vector_index/IndexRHNSW.cpp
+        knowhere/index/vector_index/IndexHNSW.cpp
+        knowhere/index/vector_index/IndexRHNSWFlat.cpp
+        knowhere/index/vector_index/IndexRHNSWSQ.cpp
+        knowhere/index/vector_index/IndexRHNSWPQ.cpp
+        knowhere/index/vector_index/IndexNGT.cpp
+        knowhere/index/vector_index/IndexNGTPANNG.cpp
+        knowhere/index/vector_index/IndexNGTONNG.cpp
+        )
+
+set(vector_offset_index_srcs
+        knowhere/index/vector_offset_index/OffsetBaseIndex.cpp
+        knowhere/index/vector_offset_index/IndexIVF_NM.cpp
+        knowhere/index/vector_offset_index/IndexNSG_NM.cpp
         )
 
 if (MILVUS_SUPPORT_SPTAG)
-    set(index_srcs
+    set(vector_index_srcs
             knowhere/index/vector_index/adapter/SptagAdapter.cpp
             knowhere/index/vector_index/helpers/SPTAGParameterMgr.cpp
             knowhere/index/vector_index/IndexSPTAG.cpp
-            ${index_srcs}
+            ${vector_index_srcs}
             )
 endif ()
 
@@ -81,6 +94,8 @@ set(depend_libs
         gomp
         gfortran
         pthread
+        fiu
+        ngt
         )
 
 if (MILVUS_SUPPORT_SPTAG)
@@ -90,21 +105,6 @@ if (MILVUS_SUPPORT_SPTAG)
             )
 endif ()
 
-
-if (FAISS_WITH_MKL)
-    set(depend_libs ${depend_libs}
-            "-Wl,--start-group \
-            ${MKL_LIB_PATH}/libmkl_intel_ilp64.a \
-            ${MKL_LIB_PATH}/libmkl_gnu_thread.a \
-            ${MKL_LIB_PATH}/libmkl_core.a \
-            -Wl,--end-group -lgomp -lpthread -lm -ldl"
-            )
-else ()
-    set(depend_libs ${depend_libs}
-            ${OpenBLAS_LIBRARIES}
-            ${LAPACK_LIBRARIES}
-            )
-endif ()
 
 if (MILVUS_GPU_VERSION)
     include_directories(${CUDA_INCLUDE_DIRS})
@@ -117,7 +117,7 @@ if (MILVUS_GPU_VERSION)
             ${cuda_lib}
             )
 
-    set(index_srcs ${index_srcs}
+    set(vector_index_srcs ${vector_index_srcs}
             knowhere/index/vector_index/gpu/IndexGPUIDMAP.cpp
             knowhere/index/vector_index/gpu/IndexGPUIVF.cpp
             knowhere/index/vector_index/gpu/IndexGPUIVFPQ.cpp
@@ -126,13 +126,18 @@ if (MILVUS_GPU_VERSION)
             knowhere/index/vector_index/helpers/Cloner.cpp
             knowhere/index/vector_index/helpers/FaissGpuResourceMgr.cpp
             )
+
+    set(vector_offset_index_srcs ${vector_offset_index_srcs}
+            knowhere/index/vector_offset_index/gpu/IndexGPUIVF_NM.cpp
+            )
 endif ()
 
 if (NOT TARGET knowhere)
     add_library(
             knowhere STATIC
             ${external_srcs}
-            ${index_srcs}
+            ${vector_index_srcs}
+            ${vector_offset_index_srcs}
     )
 endif ()
 

@@ -33,10 +33,10 @@ class BinaryIDMAP : public VecIndex, public FaissBaseBinaryIndex {
     }
 
     BinarySet
-    Serialize(const Config& config = Config()) override;
+    Serialize(const Config&) override;
 
     void
-    Load(const BinarySet& index_binary) override;
+    Load(const BinarySet&) override;
 
     void
     Train(const DatasetPtr&, const Config&) override;
@@ -50,30 +50,16 @@ class BinaryIDMAP : public VecIndex, public FaissBaseBinaryIndex {
     DatasetPtr
     Query(const DatasetPtr&, const Config&) override;
 
-#if 0
-    DatasetPtr
-    QueryById(const DatasetPtr& dataset_ptr, const Config& config) override;
-#endif
+    int64_t
+    Count() override;
 
     int64_t
-    Count() override {
-        return index_->ntotal;
-    }
-
-    int64_t
-    Dim() override {
-        return index_->d;
-    }
+    Dim() override;
 
     int64_t
     IndexSize() override {
         return Count() * Dim() / 8;
     }
-
-#if 0
-    DatasetPtr
-    GetVectorById(const DatasetPtr& dataset_ptr, const Config& config) override;
-#endif
 
     virtual const uint8_t*
     GetRawVectors();

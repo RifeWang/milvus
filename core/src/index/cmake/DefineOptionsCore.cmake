@@ -64,6 +64,8 @@ define_option_string(KNOWHERE_DEPENDENCY_SOURCE
         "BUNDLED"
         "SYSTEM")
 
+define_option(KNOWHERE_USE_CCACHE "Use ccache when compiling (if available)" ON)
+
 define_option(KNOWHERE_VERBOSE_THIRDPARTY_BUILD
         "Show output from ExternalProjects rather than just logging to files" ON)
 
@@ -83,6 +85,8 @@ define_option(KNOWHERE_WITH_FAISS "Build with FAISS library" ON)
 define_option(KNOWHERE_WITH_FAISS_GPU_VERSION "Build with FAISS GPU version" ON)
 
 define_option(FAISS_WITH_MKL "Build FAISS with MKL" OFF)
+
+define_option(MILVUS_CUDA_ARCH "Build with CUDA arch" "DEFAULT")
 
 #----------------------------------------------------------------------
 set_option_category("Test and benchmark")
@@ -105,7 +109,7 @@ macro(config_summary)
     message(STATUS "  Source directory: ${CMAKE_CURRENT_SOURCE_DIR}")
     if (${CMAKE_EXPORT_COMPILE_COMMANDS})
         message(
-                STATUS "  Compile commands: ${INDEX_BINARY_DIR}/compile_commands.json")
+                STATUS "  Compile commands: ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json")
     endif ()
 
     foreach (category ${KNOWHERE_OPTION_CATEGORIES})

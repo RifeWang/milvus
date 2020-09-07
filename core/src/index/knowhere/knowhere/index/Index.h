@@ -23,23 +23,13 @@ namespace knowhere {
 class Index : public milvus::cache::DataObj {
  public:
     virtual BinarySet
-    Serialize(const Config& config = Config()) = 0;
+    Serialize(const Config& config) = 0;
 
     virtual void
     Load(const BinarySet&) = 0;
 };
 
 using IndexPtr = std::shared_ptr<Index>;
-
-// todo: remove from knowhere
-class ToIndexData : public milvus::cache::DataObj {
- public:
-    explicit ToIndexData(int64_t size) : size_(size) {
-    }
-
- private:
-    int64_t size_ = 0;
-};
 
 }  // namespace knowhere
 }  // namespace milvus

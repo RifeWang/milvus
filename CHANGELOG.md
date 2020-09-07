@@ -1,19 +1,113 @@
 # Changelog
 
-Please mark all change in change log and use the issue from GitHub
+Please mark all changes in change log and use the issue from GitHub
 
 # Milvus 0.11.0 (TBD)
 
 ## Bug
--   \#2487 Remove timeout when creating collection in dev test
+-   \#2532 Fix Milvus docker image report illegal instruction
 -   \#2551 Fix test_hybrid_db and test_rpc error
+-   \#2582 CreateHybridIndex.cpp compile error
+-   \#2693 Collection create success if no dimension value provided
+-   \#2694 Collection create success if an invalid field name provided
+-   \#2695 The number of fields should be limited
+-   \#2696 Check the validity of the parameters of creating collection: segment_size
+-   \#2697 Index can not be created
+-   \#2698 Count entities got wrong result with binary vectors
+-   \#2728 Index type name should returned if index type is not supported
+-   \#2731 No entity returned with `get_entity_by_id`
+-   \#2732 Server destroyed after `delete by id`
+-   \#2733 The max value of top-k should be limited
+-   \#2763 Unexpected error when insert binary entities
+-   \#2765 Server crashed when calling `get_entity_by_id`
+-   \#2783 Wrong result returned if searching with tags
+-   \#2790 Distances returned by calling `search` is inaccurate
+-   \#2818 Wrong result returned by `get_entity_by_id`
+-   \#2823 Server crashed during inserting, and can not restart
+-   \#2845 Server crashed after calling `delete_entity_by_id`
+-   \#2852 Fix Prometheus rebuild problem.
+-   \#2869 Create index failed with binary vectors
+-   \#2893 Insert binary data failed
+-   \#2957 There is no exisitence check of annoy search parameter
+-   \#3406 No debug and info log generated after server started
+-   \#3407 Server get stuck if create index after entities inserted with no manual flush
+-   \#3446 ListIDInSegment get wrong result when delete more than one ids
+-   \#3448 RHNSWFlatTest failed
+-   \#3453 Fix server crashed during stability test
+-   \#3482 Server crashed during adding entities
+-   \#3490 Fix ut DBTest.DeleteEntitiesTest assert fail
+-   \#3511 SearchTask::nq() should not return 0
+-   \#3514 Search failed with regex tag name
 
 ## Feature
 -   \#2319 Redo metadata to support MVCC
 -   \#2509 Count up query statistics for debug ease
+-   \#2572 Support structured data index
+-   \#2585 Support IVF_PQ on GPU with using metric_type IP
+-   \#2689 Construct Knowhere Index Without Data
+-   \#2940 Add option to build.sh for cuda arch
+-   \#3132 Refine the implementation of hnsw in faiss and add support for hnsw-flat, hnsw-pq and hnsw-sq8
 
 ## Improvement
 -   \#2543 Remove secondary_path related code
+-   \#2544 Optimize unittest build
+-   \#2561 Clean util dependencies with other modules
+-   \#2568 Upgrade thirdparty oatpp to v1.1.0
+-   \#2612 Move all APIs in utils into namespace milvus 
+-   \#2675 Print out system memory size when report invalid cpu cache size 
+-   \#2686 Remove dependency on sqlite_orm
+-   \#2841 Replace IndexType/EngineType/MetricType
+-   \#2858 Unify index name in db
+-   \#2884 Using BlockingQueue in JobMgr
+-   \#3220 Enable -Werror to improve code quality
+-   \#3449 Upgrade master version to v0.11.0
+
+## Task
+
+# Milvus 0.10.2 (2020-08-15)
+
+## Bug
+-   \#2890 Fix the index size caculation in cache
+-   \#2952 Fix the result merging of IVF_PQ IP
+-   \#2975 Fix config UT failed
+-   \#3012 If the cache is too small, queries using multiple GPUs will cause to crash
+-   \#3133 Reverse query result in mishards if metric type is IP
+
+## Feature
+
+## Improvement
+-   \#2653 Improve IVF search performance when NQ and nProbe are both large
+-   \#2828 Let Faiss not to compile half float by default
+
+## Task
+
+# Milvus 0.10.1 (2020-07-20)
+
+## Bug
+-   \#2487 Enlarge timeout value for creating collection
+-   \#2487 HotFix release lock failed on NAS
+-   \#2557 Fix random crash of INSERT_DUPLICATE_ID case
+-   \#2578 Result count doesn't match target vectors count
+-   \#2585 Support IVF_PQ IP on GPU
+-   \#2598 Fix Milvus docker image report illegal instruction
+-   \#2617 Fix HNSW and RNSG index files size
+-   \#2637 Suit the range of HNSW parameters
+-   \#2642 Create index failed and server crashed
+-   \#2649 Search parameter of annoy has conflict with document
+-   \#2690 Remove body parser in show-partitions endpoints
+-   \#2692 Milvus hangs during multi-thread concurrent search
+-   \#2739 Fix mishards start failed
+-   \#2752 Milvus formats vectors data to double-precision and return to http client
+-   \#2767 Fix a bug of getting wrong nprobe limitation in knowhere on GPU version
+-   \#2768 After building the index, the number of vectors increases
+-   \#2774 Server down during loading data
+-   \#2776 Fix too many data copies during creating IVF index
+-   \#2813 To implemente RNSG IP
+
+## Feature
+
+## Improvement
+-   \#2932 Upgrade mishards for milvus 0.10.1
 
 ## Task
 
@@ -40,8 +134,6 @@ Please mark all change in change log and use the issue from GitHub
 -   \#2495 Add creating lock file failure reason.
 -   \#2516 Improve unit test coverage
 -   \#2548 Upgrade mishards for milvus v0.10.0
-
-## Task
 
 # Milvus 0.9.1 (2020-05-29)
 
@@ -847,3 +939,4 @@ Please mark all change in change log and use the issue from GitHub
 -   MS-1 Add CHANGELOG.md
 -   MS-4 Refactor the vecwise_engine code structure
 -   MS-62 Search range to all if no date specified
+

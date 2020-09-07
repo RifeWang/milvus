@@ -11,14 +11,55 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
+#include <string>
 #include "faiss/utils/ConcurrentBitset.h"
 #include "knowhere/index/Index.h"
 
 namespace milvus {
 namespace knowhere {
 
-enum OperatorType { LT = 0, LE, GT, GE };
+enum OperatorType { LT = 0, LE = 1, GT = 3, GE = 4 };
+
+static std::map<std::string, OperatorType> s_map_operator_type = {
+    {"LT", OperatorType::LT},
+    {"LE", OperatorType::LE},
+    {"GT", OperatorType::GT},
+    {"GE", OperatorType::GE},
+};
+
+template <typename T>
+struct IndexStructure {
+    IndexStructure() : a_(0), idx_(0) {
+    }
+    explicit IndexStructure(const T a) : a_(a), idx_(0) {
+    }
+    IndexStructure(const T a, const size_t idx) : a_(a), idx_(idx) {
+    }
+    bool
+    operator<(const IndexStructure& b) const {
+        return a_ < b.a_;
+    }
+    bool
+    operator<=(const IndexStructure& b) const {
+        return a_ <= b.a_;
+    }
+    bool
+    operator>(const IndexStructure& b) const {
+        return a_ > b.a_;
+    }
+    bool
+    operator>=(const IndexStructure& b) const {
+        return a_ >= b.a_;
+    }
+    bool
+    operator==(const IndexStructure& b) const {
+        return a_ == b.a_;
+    }
+    T a_;
+    size_t idx_;
+};
 
 template <typename T>
 class StructuredIndex : public Index {

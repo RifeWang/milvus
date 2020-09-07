@@ -30,7 +30,7 @@ class IndexAnnoy : public VecIndex {
     }
 
     BinarySet
-    Serialize(const Config& config = Config()) override;
+    Serialize(const Config& config) override;
 
     void
     Load(const BinarySet& index_binary) override;
@@ -61,6 +61,9 @@ class IndexAnnoy : public VecIndex {
 
     int64_t
     Dim() override;
+
+    void
+    UpdateIndexSize() override;
 
  private:
     MetricType metric_type_;

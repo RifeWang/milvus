@@ -12,10 +12,10 @@
 #pragma once
 
 #include <string>
+#include "config/ConfigMgr.h"
 #include "utils/Status.h"
 
-namespace milvus {
-namespace server {
+namespace milvus::server {
 
 class Server {
  public:
@@ -38,19 +38,26 @@ class Server {
     Daemonize();
 
     Status
-    LoadConfig();
-
-    Status
     StartService();
     void
     StopService();
+
+ private:
+    static std::string
+    RunningMode(bool cluster_enable, ClusterRole cluster_role);
+
+    static void
+    LogConfigInFile(const std::string& path);
+
+    static void
+    LogCpuInfo();
 
  private:
     int64_t daemonized_ = 0;
     int pid_fd_ = -1;
     std::string pid_filename_;
     std::string config_filename_;
+    // ConfigMgrPtr config_mgr_;
 };  // Server
 
-}  // namespace server
-}  // namespace milvus
+}  // namespace milvus::server

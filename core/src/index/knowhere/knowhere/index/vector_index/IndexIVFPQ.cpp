@@ -24,6 +24,7 @@
 #include "knowhere/index/vector_index/adapter/VectorAdapter.h"
 #include "knowhere/index/vector_index/helpers/IndexParameter.h"
 #ifdef MILVUS_GPU_VERSION
+#include "knowhere/index/vector_index/ConfAdapter.h"
 #include "knowhere/index/vector_index/gpu/IndexGPUIVF.h"
 #include "knowhere/index/vector_index/gpu/IndexGPUIVFPQ.h"
 #endif
@@ -33,20 +34,26 @@ namespace knowhere {
 
 void
 IVFPQ::Train(const DatasetPtr& dataset_ptr, const Config& config) {
-    GETTENSOR(dataset_ptr)
+    GET_TENSOR_DATA_DIM(dataset_ptr)
 
-    faiss::Index* coarse_quantizer = new faiss::IndexFlat(dim, GetMetricType(config[Metric::TYPE].get<std::string>()));
-    auto index = std::make_shared<faiss::IndexIVFPQ>(coarse_quantizer, dim, config[IndexParams::nlist].get<int64_t>(),
-                                                     config[IndexParams::m].get<int64_t>(),
-                                                     config[IndexParams::nbits].get<int64_t>());
-    index->train(rows, (float*)p_data);
+    faiss::MetricType metric_type = GetMetricType(config[Metric::TYPE].get<std::string>());
+    faiss::Index* coarse_quantizer = new faiss::IndexFlat(dim, metric_type);
+    index_ = std::shared_ptr<faiss::Index>(new faiss::IndexIVFPQ(
+        coarse_quantizer, dim, config[IndexParams::nlist].get<int64_t>(), config[IndexParams::m].get<int64_t>(),
+        config[IndexParams::nbits].get<int64_t>(), metric_type));
 
-    index_.reset(faiss::clone_index(index.get()));
+    index_->train(rows, reinterpret_cast<const float*>(p_data));
 }
 
 VecIndexPtr
 IVFPQ::CopyCpuToGpu(const int64_t device_id, const Config& config) {
 #ifdef MILVUS_GPU_VERSION
+    auto ivfpq_index = dynamic_cast<faiss::IndexIVFPQ*>(index_.get());
+    int64_t dim = ivfpq_index->d;
+    int64_t m = ivfpq_index->pq.M;
+    if (!IVFPQConfAdapter::GetValidGPUM(dim, m)) {
+        return nullptr;
+    }
     if (auto res = FaissGpuResourceMgr::GetInstance().GetRes(device_id)) {
         ResScope rs(res, device_id, false);
         auto gpu_index = faiss::gpu::index_cpu_to_gpu(res->faiss_res.get(), device_id, index_.get());
@@ -71,6 +78,29 @@ IVFPQ::GenParams(const Config& config) {
     // params->max_codes = config["max_codes"]
 
     return params;
+}
+
+void
+IVFPQ::UpdateIndexSize() {
+    if (!index_) {
+        KNOWHERE_THROW_MSG("index not initialize");
+    }
+    auto ivfpq_index = dynamic_cast<faiss::IndexIVFPQ*>(index_.get());
+    auto nb = ivfpq_index->invlists->compute_ntotal();
+    auto code_size = ivfpq_index->code_size;
+    auto pq = ivfpq_index->pq;
+    auto nlist = ivfpq_index->nlist;
+    auto d = ivfpq_index->d;
+
+    // ivf codes, ivf ids and quantizer
+    auto capacity = nb * code_size + nb * sizeof(int64_t) + nlist * d * sizeof(float);
+    auto centroid_table = pq.M * pq.ksub * pq.dsub * sizeof(float);
+    auto precomputed_table = nlist * pq.M * pq.ksub * sizeof(float);
+    if (precomputed_table > ivfpq_index->precomputed_table_max_bytes) {
+        // will not precompute table
+        precomputed_table = 0;
+    }
+    index_size_ = capacity + centroid_table + precomputed_table;
 }
 
 }  // namespace knowhere
