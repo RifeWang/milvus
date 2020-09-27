@@ -25,7 +25,6 @@ namespace {
 const char* COLLECTION_NAME = milvus_sdk::Utils::GenCollectionName().c_str();
 
 constexpr int64_t COLLECTION_DIMENSION = 512;
-constexpr int64_t COLLECTION_INDEX_FILE_SIZE = 1024;
 constexpr milvus::MetricType COLLECTION_METRIC_TYPE = milvus::MetricType::L2;
 constexpr int64_t BATCH_ENTITY_COUNT = 10000;
 constexpr int64_t NQ = 5;
@@ -33,7 +32,6 @@ constexpr int64_t TOP_K = 10;
 constexpr int64_t NPROBE = 16;
 constexpr int64_t SEARCH_TARGET = BATCH_ENTITY_COUNT / 2;  // change this value, result is different
 constexpr int64_t ADD_ENTITY_LOOP = 10;
-constexpr milvus::IndexType INDEX_TYPE = milvus::IndexType::IVFFLAT;
 constexpr int32_t NLIST = 1024;
 const char* PARTITION_TAG = "part";
 const char* DIMENSION = "dim";
@@ -113,7 +111,7 @@ ClientTest::CreateCollection(const std::string& collection_name) {
     field_ptr4->extra_params = extra_params_4.dump();
 
     JSON extra_params;
-    extra_params["segment_row_count"] = 1024;
+    extra_params["segment_row_limit"] = 10000;
     extra_params["auto_id"] = false;
     milvus::Mapping mapping = {collection_name, {field_ptr1, field_ptr2, field_ptr3, field_ptr4}};
 
@@ -281,7 +279,7 @@ ClientTest::LoadCollection(const std::string& collection_name) {
 void
 ClientTest::CompactCollection(const std::string& collection_name) {
     milvus_sdk::TimeRecorder rc("Compact");
-    milvus::Status stat = conn_->Compact(collection_name);
+    milvus::Status stat = conn_->Compact(collection_name, 0.1);
     std::cout << "CompactCollection function call status: " << stat.message() << std::endl;
 }
 
@@ -339,6 +337,7 @@ ClientTest::Test() {
     GetCollectionInfo(collection_name);
     //    GetCollectionStats(collection_name);
     //
+    LoadCollection(COLLECTION_NAME);
     BuildVectors(NQ, COLLECTION_DIMENSION);
     //    GetEntityByID(collection_name, search_id_array_);
     SearchEntities(collection_name, TOP_K, NPROBE, "L2");

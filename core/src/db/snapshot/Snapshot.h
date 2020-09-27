@@ -268,17 +268,25 @@ class Snapshot : public ReferenceProxy {
     void
     UnRefAll();
 
+    void
+    UnRef() override {
+        ReferenceProxy::UnRef();
+        if (ref_count_ == 0) {
+            UnRefAll();
+        }
+    }
+
     template <typename ResourceT>
     void
     DumpResource(const std::string& tag = "") const {
         auto& resources = GetResources<ResourceT>();
-        std::cout << typeid(*this).name() << " Dump " << GetID() << " " << ResourceT::Name << " Start [" << tag
-                  << "]:" << resources.size() << std::endl;
+        LOG_ENGINE_DEBUG_ << typeid(*this).name() << " Dump " << GetID() << " " << ResourceT::Name << " Start [" << tag
+                          << "]:" << resources.size();
         for (auto& kv : resources) {
-            std::cout << "\t" << kv.second->ToString() << std::endl;
+            LOG_ENGINE_DEBUG_ << "\t" << kv.second->ToString();
         }
-        std::cout << typeid(*this).name() << " Dump " << GetID() << " " << ResourceT::Name << "  End [" << tag
-                  << "]:" << resources.size() << std::endl;
+        LOG_ENGINE_DEBUG_ << typeid(*this).name() << " Dump " << GetID() << " " << ResourceT::Name << "  End [" << tag
+                          << "]:" << resources.size();
     }
 
     template <typename T>

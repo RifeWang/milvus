@@ -21,9 +21,7 @@
 #include "db/snapshot/ResourceGCEvent.h"
 #include "db/snapshot/Snapshots.h"
 
-namespace milvus {
-namespace engine {
-namespace snapshot {
+namespace milvus::engine::snapshot {
 
 static ID_TYPE UID = 1;
 
@@ -39,6 +37,9 @@ Operations::Operations(const OperationContext& context, ScopedSnapshotT prev_ss,
       uid_(UID++),
       status_(SS_OPERATION_PENDING, "Operation Pending"),
       type_(type) {
+    if (prev_ss_ && context_.lsn == 0) {
+        context_.lsn = prev_ss_->GetMaxLsn();
+    }
 }
 
 std::string
@@ -114,7 +115,7 @@ Operations::Done(StorePtr store) {
         /*                 context_.new_collection_commit->GetCollectionId(), holder.rbegin()->GetID()); */
         /*     } */
         /* } */
-        std::cout << ToString() << std::endl;
+        LOG_ENGINE_DEBUG_ << ToString();
     }
     finish_cond_.notify_all();
 }
@@ -209,7 +210,10 @@ Operations::ApplyToStore(StorePtr store) {
 
 Status
 Operations::OnSnapshotDropped() {
-    return Status::OK();
+    std::stringstream msg;
+    msg << "Collection " << GetStartedSS()->GetCollection()->GetID() << " was dropped before" << std::endl;
+    LOG_ENGINE_WARNING_ << msg.str();
+    return Status(SS_COLLECTION_DROPPED, msg.str());
 }
 
 Status
@@ -233,6 +237,8 @@ Operations::PreExecute(StorePtr store) {
         STATUS_CHECK(Snapshots::GetInstance().GetSnapshot(context_.prev_ss, GetStartedSS()->GetCollectionId()));
         if (!context_.prev_ss) {
             STATUS_CHECK(OnSnapshotDropped());
+        } else if (!prev_ss_->GetCollection()->IsActive()) {
+            STATUS_CHECK(OnSnapshotDropped());
         } else if (prev_ss_->GetID() != context_.prev_ss->GetID()) {
             STATUS_CHECK(OnSnapshotStale());
         }
@@ -255,7 +261,7 @@ Operations::OnApplyTimeoutCallback(StorePtr store) {
 
     auto status = store->ApplyOperation(*this, context);
     while (status.code() == SS_TIMEOUT && !HasAborted()) {
-        std::cout << GetName() << " Timeout! Try " << ++try_times << std::endl;
+        LOG_ENGINE_WARNING_ << GetName() << " Timeout! Try " << ++try_times;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         status = store->ApplyOperation(*this, context);
     }
@@ -290,7 +296,7 @@ ApplyRollBack(std::set<std::shared_ptr<ResourceContext<ResourceT>>>& step_contex
         auto res = step_context->Resource();
         auto evt_ptr = std::make_shared<ResourceGCEvent<ResourceT>>(res);
         EventExecutor::GetInstance().Submit(evt_ptr);
-        std::cout << "Rollback " << typeid(ResourceT).name() << ": " << res->GetID() << std::endl;
+        LOG_ENGINE_DEBUG_ << "Rollback " << typeid(ResourceT).name() << ": " << res->GetID();
     }
 }
 
@@ -305,6 +311,4 @@ Operations::~Operations() {
     }
 }
 
-}  // namespace snapshot
-}  // namespace engine
-}  // namespace milvus
+}  // namespace milvus::engine::snapshot

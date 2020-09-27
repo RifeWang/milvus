@@ -12,7 +12,7 @@ from utils import *
 
 dim = 128
 segment_row_count = 5000
-top_k_limit = 2048
+top_k_limit = 16384
 collection_id = "search"
 tag = "1970_01_01"
 insert_interval_time = 1.5
@@ -141,7 +141,7 @@ class TestSearchBase:
 
     @pytest.fixture(
         scope="function",
-        params=[1, 10, 2049]
+        params=[1, 10, 16385]
     )
     def get_top_k(self, request):
         yield request.param
@@ -1577,6 +1577,22 @@ class TestSearchInvalid(object):
         query, vecs = gen_query_vectors(field_name, entities, top_k, 1, search_params=search_params["search_params"])
         with pytest.raises(Exception) as e:
             res = connect.search(collection, query)
+
+    @pytest.mark.level(2)
+    def test_search_with_invalid_params_binary(self, connect, binary_collection):
+        '''
+        target: test search fuction, with the wrong nprobe
+        method: search with nprobe
+        expected: raise an error, and the connection is normal
+        '''
+        nq = 1
+        index_type = "BIN_IVF_FLAT"
+        int_vectors, entities, ids = init_binary_data(connect, binary_collection)
+        query_int_vectors, query_entities, tmp_ids = init_binary_data(connect, binary_collection, nb=1, insert=False)
+        connect.create_index(binary_collection, binary_field_name, {"index_type": index_type, "metric_type": "JACCARD", "params": {"nlist": 1024}})
+        query, vecs = gen_query_vectors(binary_field_name, query_entities, top_k, nq, search_params={"nprobe": 0}, metric_type="JACCARD")
+        with pytest.raises(Exception) as e:
+            res = connect.search(binary_collection, query)
 
     @pytest.mark.level(2)
     def test_search_with_empty_params(self, connect, collection, args, get_simple_index):

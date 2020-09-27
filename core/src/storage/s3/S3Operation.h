@@ -8,53 +8,42 @@
 // Unless required by applicable law or agreed to in writing, software distributed under the License
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License.
-#ifdef MILVUS_GPU_VERSION
+
 #pragma once
 
-#include <condition_variable>
-#include <deque>
-#include <limits>
-#include <list>
 #include <memory>
-#include <mutex>
-#include <queue>
 #include <string>
-#include <thread>
-#include <unordered_map>
 #include <vector>
 
-#include "config/ConfigMgr.h"
-#include "scheduler/selector/Pass.h"
+#include "storage/Operation.h"
 
 namespace milvus {
-namespace scheduler {
+namespace storage {
 
-class FaissIVFSQ8Pass : public Pass, public ConfigObserver {
+class S3Operation : public Operation {
  public:
-    FaissIVFSQ8Pass();
+    explicit S3Operation(const std::string& dir_path);
 
-    ~FaissIVFSQ8Pass();
-
- public:
     void
-    Init() override;
+    CreateDirectory() override;
+
+    const std::string&
+    GetDirectory() const override;
+
+    void
+    ListDirectory(std::vector<std::string>& file_paths) override;
 
     bool
-    Run(const TaskPtr& task) override;
+    DeleteFile(const std::string& file_path) override;
 
- public:
-    void
-    ConfigUpdate(const std::string& name) override;
+    bool
+    Move(const std::string& tar_name, const std::string& src_name) override;
 
  private:
-    int64_t idx_ = 0;
-    bool gpu_enable_ = false;
-    int64_t threshold_ = 0;
-    std::vector<int64_t> search_gpus_;
+    const std::string dir_path_;
 };
 
-using FaissIVFSQ8PassPtr = std::shared_ptr<FaissIVFSQ8Pass>;
+using S3OperationPtr = std::shared_ptr<S3Operation>;
 
-}  // namespace scheduler
+}  // namespace storage
 }  // namespace milvus
-#endif

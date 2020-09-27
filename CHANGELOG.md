@@ -31,6 +31,7 @@ Please mark all changes in change log and use the issue from GitHub
 -   \#2957 There is no exisitence check of annoy search parameter
 -   \#3406 No debug and info log generated after server started
 -   \#3407 Server get stuck if create index after entities inserted with no manual flush
+-   \#3427 Error should be specified if searching a collection not existed
 -   \#3446 ListIDInSegment get wrong result when delete more than one ids
 -   \#3448 RHNSWFlatTest failed
 -   \#3453 Fix server crashed during stability test
@@ -38,6 +39,16 @@ Please mark all changes in change log and use the issue from GitHub
 -   \#3490 Fix ut DBTest.DeleteEntitiesTest assert fail
 -   \#3511 SearchTask::nq() should not return 0
 -   \#3514 Search failed with regex tag name
+-   \#3533 Scheduler/Selector needs to judge the index type
+-   \#3621 Fix crash where getting octets information
+-   \#3626 Server crashed during search with index pq on dataset: sift-50m
+-   \#3642 Fix the bug of file not close when check sum failed.
+-   \#3652 Proto of C++ sdk is different from milvus server
+-   \#3668 Docker exit without any logs
+-   \#3672 0.11.0 docker image is 200M larger due to the un-expected installation of openblas
+-   \#3689 Client get stuck if drop collection during creating index
+-   \#3734 GET_PAGE_ENTITY sometimes failed in test_web
+-   \#3741 Inconsistent parameter names
 
 ## Feature
 -   \#2319 Redo metadata to support MVCC
@@ -47,6 +58,10 @@ Please mark all changes in change log and use the issue from GitHub
 -   \#2689 Construct Knowhere Index Without Data
 -   \#2940 Add option to build.sh for cuda arch
 -   \#3132 Refine the implementation of hnsw in faiss and add support for hnsw-flat, hnsw-pq and hnsw-sq8
+-   \#3463 Restrict the content of partition_tag
+-   \#3502 Normalize http method in web sever
+-   \#3732 Add new operation supporting multi-segments
+-   \#3828 Limit the number of insert requests processing concurrently.
 
 ## Improvement
 -   \#2543 Remove secondary_path related code
@@ -61,6 +76,8 @@ Please mark all changes in change log and use the issue from GitHub
 -   \#2884 Using BlockingQueue in JobMgr
 -   \#3220 Enable -Werror to improve code quality
 -   \#3449 Upgrade master version to v0.11.0
+-   \#3465 Optimize gc event executor
+-   \#3631 Add build option `-rdynamic` in CMakeList.txt
 
 ## Task
 

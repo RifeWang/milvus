@@ -29,11 +29,11 @@
 namespace milvus {
 namespace scheduler {
 
-class FaissIVFPQPass : public Pass, public ConfigObserver {
+class FaissIVFPass : public Pass, public ConfigObserver {
  public:
-    FaissIVFPQPass();
+    FaissIVFPass();
 
-    ~FaissIVFPQPass();
+    ~FaissIVFPass();
 
  public:
     void
@@ -53,7 +53,7 @@ class FaissIVFPQPass : public Pass, public ConfigObserver {
     std::vector<int64_t> search_gpus_;
 };
 
-using FaissIVFPQPassPtr = std::shared_ptr<FaissIVFPQPass>;
+using FaissIVFPassPtr = std::shared_ptr<FaissIVFPass>;
 
 }  // namespace scheduler
 }  // namespace milvus

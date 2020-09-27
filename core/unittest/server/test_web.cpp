@@ -26,6 +26,7 @@
 #include "config/ConfigMgr.h"
 #include "db/snapshot/EventExecutor.h"
 #include "db/snapshot/OperationExecutor.h"
+#include "db/snapshot/Snapshots.h"
 #include "scheduler/ResourceFactory.h"
 #include "scheduler/SchedInst.h"
 #include "server/DBWrapper.h"
@@ -158,11 +159,11 @@ static const char* CONTROLLER_TEST_VALID_CONFIG_STR =
     "\n"
     "general:\n"
     "  timezone: UTC+8\n"
-    "  meta_uri: sqlite://:@:/\n"
+    "  meta_uri: mock://:@:/\n"
     "\n"
     "network:\n"
     "  bind.address: 0.0.0.0\n"
-    "  bind.port: 19530\n"
+    "  bind.port: 19540\n"
     "  http.enable: true\n"
     "  http.port: 29999\n"
     "\n"
@@ -294,10 +295,16 @@ class TestClient : public oatpp::web::client::ApiClient {
     API_CALL("GET", "/collections/{collection_name}/entities", getEntityByID,
              PATH(String, collection_name, "collection_name"), QUERY(String, ids))
 
+    API_CALL("GET", "/collections/{collection_name}/entities", search, PATH(String, collection_name, "collection_name"),
+             BODY_STRING(String, body))
+
+    API_CALL("GET", "/collections/{collection_name}/entities", getEntityWithNoParams,
+             PATH(String, collection_name, "collection_name"))
+
     API_CALL("POST", "/collections/{collection_name}/entities", insert,
              PATH(String, collection_name, "collection_name"), BODY_STRING(String, body))
 
-    API_CALL("PUT", "/collections/{collection_name}/entities", entityOp,
+    API_CALL("DELETE", "/collections/{collection_name}/entities", deleteOp,
              PATH(String, collection_name, "collection_name"), BODY_STRING(String, body))
 
     API_CALL("GET", "/system/{msg}", cmd, PATH(String, cmd_str, "msg"), QUERY(String, action), QUERY(String, target))
@@ -323,7 +330,18 @@ class WebControllerTest : public ::testing::Test {
         fs.close();
 
         milvus::ConfigMgr::GetInstance().Init();
-        milvus::ConfigMgr::GetInstance().Load(config_path);
+        //        milvus::ConfigMgr::GetInstance().Set("general.meta_uri", "mock://:@:/");
+        //        milvus::ConfigMgr::GetInstance().Set("storage.path", CONTROLLER_TEST_CONFIG_DIR);
+        //        milvus::ConfigMgr::GetInstance().Set("network.http.enable", "true");
+        //        milvus::ConfigMgr::GetInstance().Set("network.http.port", "20121");
+
+        auto& config = milvus::ConfigMgr::GetInstance();
+
+        //        milvus::ConfigMgr::GetInstance().Init();
+        config.LoadFile(config_path);
+        //        milvus::ConfigMgr::GetInstance().Set("general.meta_uri", "mock://:@:/");
+
+        milvus::engine::snapshot::Snapshots::GetInstance().StartService();
 
         auto res_mgr = milvus::scheduler::ResMgrInst::GetInstance();
         res_mgr->Clear();
@@ -358,8 +376,7 @@ class WebControllerTest : public ::testing::Test {
         fs.flush();
         fs.close();
 
-        //        milvus::ConfigMgr::GetInstance().Init();
-        milvus::ConfigMgr::GetInstance().Load(config_path);
+        milvus::ConfigMgr::GetInstance().LoadFile(config_path);
 
         OATPP_COMPONENT(std::shared_ptr<oatpp::network::ClientConnectionProvider>, clientConnectionProvider);
         OATPP_COMPONENT(std::shared_ptr<oatpp::data::mapping::ObjectMapper>, objectMapper);
@@ -381,6 +398,8 @@ class WebControllerTest : public ::testing::Test {
         milvus::scheduler::CPUBuilderInst::GetInstance()->Stop();
         milvus::scheduler::ResMgrInst::GetInstance()->Stop();
         milvus::scheduler::ResMgrInst::GetInstance()->Clear();
+
+        milvus::engine::snapshot::Snapshots::GetInstance().StopService();
 
         boost::filesystem::remove_all(CONTROLLER_TEST_CONFIG_DIR);
     }
@@ -695,7 +714,7 @@ TEST_F(WebControllerTest, GET_PAGE_ENTITY) {
     CreateCollection(client_ptr, connection_ptr, collection_name, mapping_json);
 
     const int64_t dim = DIM;
-    const int64_t nb = 3;
+    const int64_t nb = 100;
     nlohmann::json insert_json;
     GenEntities(nb, dim, insert_json);
 
@@ -707,15 +726,6 @@ TEST_F(WebControllerTest, GET_PAGE_ENTITY) {
     auto status = FlushCollection(client_ptr, connection_ptr, OString(collection_name.c_str()));
     ASSERT_TRUE(status.ok());
 
-    GenEntities(22, dim, insert_json);
-    response = client_ptr->insert(collection_name.c_str(), insert_json.dump().c_str(), connection_ptr);
-    ASSERT_EQ(OStatus::CODE_201.code, response->getStatusCode());
-    result_dto = response->readBodyToDto<milvus::server::web::EntityIdsDtoT>(object_mapper.get());
-    ASSERT_EQ(22, result_dto->ids->size());
-
-    status = FlushCollection(client_ptr, connection_ptr, OString(collection_name.c_str()));
-    ASSERT_TRUE(status.ok());
-
     std::string offset = "0";
     std::string page_size = "10";
     response = client_ptr->getEntity(collection_name.c_str(), offset.c_str(), page_size.c_str(), "", connection_ptr);
@@ -725,6 +735,24 @@ TEST_F(WebControllerTest, GET_PAGE_ENTITY) {
     //    page_size = "20";
     //    response = client_ptr->getEntity(collection_name.c_str(), offset.c_str(), page_size.c_str(), connection_ptr);
     //    ASSERT_EQ(OStatus::CODE_200.code, response->getStatusCode());
+}
+
+TEST_F(WebControllerTest, GET_ENTITY_WITH_NO_PARAMS) {
+    auto collection_name = "test_get_collection_test" + RandomName();
+    nlohmann::json mapping_json;
+    CreateCollection(client_ptr, connection_ptr, collection_name, mapping_json);
+
+    const int64_t dim = DIM;
+    const int64_t nb = 3;
+    nlohmann::json insert_json;
+    GenEntities(nb, dim, insert_json);
+
+    auto status = FlushCollection(client_ptr, connection_ptr, OString(collection_name.c_str()));
+    ASSERT_TRUE(status.ok());
+
+    auto response = client_ptr->getEntity(collection_name.c_str(), "", "", "", connection_ptr);
+    std::cout << response->readBodyToString()->std_str() << std::endl;
+    ASSERT_EQ(OStatus::CODE_200.code, response->getStatusCode());
 }
 
 TEST_F(WebControllerTest, SYSTEM_INFO) {
@@ -800,7 +828,7 @@ TEST_F(WebControllerTest, SEARCH) {
         }
     })";
 
-    response = client_ptr->entityOp(collection_name.c_str(), query_str.c_str(), connection_ptr);
+    response = client_ptr->search(collection_name.c_str(), query_str.c_str(), connection_ptr);
     //    auto error_dto = response->readBodyToDto<milvus::server::web::StatusDtoT>(object_mapper.get());
     //    ASSERT_EQ(milvus::server::web::StatusCode::SUCCESS, error_dto->code);
     auto result_json = nlohmann::json::parse(response->readBodyToString()->std_str());
@@ -849,36 +877,46 @@ TEST_F(WebControllerTest, INDEX) {
             break;
         }
     }
-    //
-    //    //    index_json["index_type"] = milvus::server::web::IndexMap.at(milvus::engine::FAISS_IDMAP);
-    //
-    //    // missing index `params`
-    //    response = client_ptr->createIndex(collection_name.c_str(), index_json.dump().c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_400.code, response->getStatusCode());
-    //
-    //    index_json["params"] = nlohmann::json::parse("{\"nlist\": 10}");
-    //    response = client_ptr->createIndex(collection_name.c_str(), index_json.dump().c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_201.code, response->getStatusCode());
-    //
-    //    // drop index
-    //    response = client_ptr->dropIndex(collection_name.c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_204.code, response->getStatusCode());
-    //
-    //    // create index without existing collection
-    //    response = client_ptr->createIndex((collection_name + "fgafafafafafUUUUUUa124254").c_str(),
-    //                                       index_json.dump().c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_404.code, response->getStatusCode());
-    //
-    //    // invalid index type
-    //    index_json["index_type"] = "J46";
-    //    response = client_ptr->createIndex(collection_name.c_str(), index_json.dump().c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_400.code, response->getStatusCode());
-    //    auto result_dto = response->readBodyToDto<milvus::server::web::StatusDtoT>(object_mapper.get());
-    //    ASSERT_EQ((int64_t)milvus::server::web::StatusCode::ILLEGAL_INDEX_TYPE, result_dto->code);
-    //
-    //    // drop index
-    //    response = client_ptr->dropIndex(collection_name.c_str(), connection_ptr);
-    //    ASSERT_EQ(OStatus::CODE_204.code, response->getStatusCode());
+}
+
+TEST_F(WebControllerTest, DELETE_BY_ID) {
+    auto collection_name = "test_delete_by_id_collection_test" + RandomName();
+    nlohmann::json mapping_json;
+    CreateCollection(client_ptr, connection_ptr, collection_name, mapping_json);
+
+    nlohmann::json insert_json;
+    GenEntities(NB, DIM, insert_json);
+    auto response = client_ptr->insert(collection_name.c_str(), insert_json.dump().c_str(), connection_ptr);
+    ASSERT_EQ(OStatus::CODE_201.code, response->getStatusCode());
+
+    auto insert_result_json = nlohmann::json::parse(response->readBodyToString()->c_str());
+    ASSERT_TRUE(insert_result_json.contains("ids"));
+    auto ids_json = insert_result_json["ids"];
+    ASSERT_TRUE(ids_json.is_array());
+
+    auto status = FlushCollection(client_ptr, connection_ptr, OString(collection_name.c_str()));
+    ASSERT_TRUE(status.ok());
+
+    std::vector<std::string> ids;
+    for (auto& id : ids_json) {
+        ids.emplace_back(id.get<std::string>());
+    }
+
+    std::string offset = "0";
+    std::string page_size = "10";
+    response = client_ptr->getEntity(collection_name.c_str(), offset.c_str(), page_size.c_str(), "", connection_ptr);
+    ASSERT_EQ(OStatus::CODE_200.code, response->getStatusCode());
+
+    auto delete_ids = std::vector<std::string>(ids.begin(), ids.begin() + 10);
+
+    nlohmann::json delete_json;
+    delete_json["ids"] = delete_ids;
+
+    response = client_ptr->deleteOp(collection_name.c_str(), delete_json.dump().c_str(), connection_ptr);
+    ASSERT_EQ(OStatus::CODE_200.code, response->getStatusCode()) << response->readBodyToString()->c_str();
+
+    status = FlushCollection(client_ptr, connection_ptr, OString(collection_name.c_str()));
+    ASSERT_TRUE(status.ok());
 
     // insert data and create index
     //    auto status = InsertData(client_ptr, connection_ptr, collection_name, 64, 200);

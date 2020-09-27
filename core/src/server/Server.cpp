@@ -17,7 +17,8 @@
 #include <cstring>
 #include <unordered_map>
 
-#include "config/ServerConfig.h"
+#include "config/ConfigMgr.h"
+#include "db/snapshot/Snapshots.h"
 #include "index/archive/KnowhereResource.h"
 #include "log/LogMgr.h"
 #include "metrics/Metrics.h"
@@ -176,7 +177,7 @@ Server::Start() {
             STATUS_CHECK(Directory::Access(config.storage.path(), wal_path, config.logs.path()));
 
             if (config.system.lock.enable()) {
-                STATUS_CHECK(Directory::Lock(config.storage.path(), wal_path));
+                STATUS_CHECK(Directory::Lock(config.storage.path(), wal_path, fd_list_));
             }
         }
 
@@ -212,6 +213,11 @@ Server::Start() {
 void
 Server::Stop() {
     std::cerr << "Milvus server is going to shutdown ..." << std::endl;
+
+    for (auto fd : fd_list_) {
+        LOG_SERVER_DEBUG_C << "close directory lock file descriptor: " << fd;
+        close(fd);
+    }
 
     /* Unlock and close lockfile */
     if (pid_fd_ != -1) {
@@ -250,6 +256,8 @@ Server::StartService() {
         goto FAIL;
     }
 
+    engine::snapshot::Snapshots::GetInstance().StartService();
+
     scheduler::StartSchedulerService();
 
     stat = DBWrapper::GetInstance().StartService();
@@ -280,6 +288,7 @@ Server::StopService() {
     grpc::GrpcServer::GetInstance().Stop();
     DBWrapper::GetInstance().StopService();
     scheduler::StopSchedulerService();
+    engine::snapshot::Snapshots::GetInstance().StopService();
     engine::KnowhereResource::Finalize();
 }
 

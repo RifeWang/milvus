@@ -152,6 +152,9 @@ static void knn_inner_product_sse (const float * x,
         size_t block_x = std::min(
                 get_L3_Size() / (d * sizeof(float) + thread_max_num * k * (sizeof(float) + sizeof(int64_t))),
                 nx);
+        if (block_x == 0) {
+            block_x = 1;
+        }
 
         size_t all_heap_size = block_x * k * thread_max_num;
         float *value = new float[all_heap_size];
@@ -261,6 +264,9 @@ static void knn_L2sqr_sse (
         size_t block_x = std::min(
                 get_L3_Size() / (d * sizeof(float) + thread_max_num * k * (sizeof(float) + sizeof(int64_t))),
                 nx);
+        if (block_x == 0) {
+            block_x = 1;
+        }
 
         size_t all_heap_size = block_x * k * thread_max_num;
         float *value = new float[all_heap_size];
@@ -625,9 +631,9 @@ void knn_jaccard (const float * x,
                   float_maxheap_array_t * res,
                   ConcurrentBitsetPtr bitset)
 {
-    if (d % 4 == 0 && nx < distance_compute_blas_threshold) {
+    if (d % 4 != 0) {
 //        knn_jaccard_sse (x, y, d, nx, ny, res);
-        printf("jaccard sse not implemented!\n");
+        printf("dimension is not a multiple of 4!\n");
     } else {
         NopDistanceCorrection nop;
         knn_jaccard_blas (x, y, d, nx, ny, res, nop, bitset);
